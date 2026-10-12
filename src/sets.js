@@ -66,3 +66,12 @@ export function parseLoose(text){
   if (a >= 0 && b > a) return JSON.parse(t.slice(a, b + 1));
   throw new Error("응답에서 JSON을 찾지 못했어요.");
 }
+
+/* 꼬리 질문 응답 정리: { items: [{ q, ko, intent, point }] } 최대 5개 */
+export function normalizeFollowups(raw){
+  const list = Array.isArray(raw) ? raw : arr(raw?.items || raw?.questions);
+  const items = list.filter(x => x && asStr(x.q).trim())
+    .map(x => ({ q: asStr(x.q).trim(), ko: asStr(x.ko), intent: asStr(x.intent), point: asStr(x.point) })).slice(0, 5);
+  if (!items.length) throw new Error("꼬리 질문 형식이 올바르지 않아요. 다시 만들어 보세요.");
+  return items;
+}

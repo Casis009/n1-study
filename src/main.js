@@ -5,8 +5,9 @@
 import { h, $, prefs, fmtTime } from "./dom.js";
 import { KINDS, TOPICS, EXAM } from "./kinds.js";
 import { SAMPLES } from "./samples.js";
-import { prepSet } from "./sets.js";
-import { buildPrompt } from "./prompt.js";
+import { prepSet, normalizeFollowups } from "./sets.js";
+import { CATS, CAT } from "./interview.js";
+import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 
@@ -18,7 +19,7 @@ const settings = Object.assign({ key: "", model: DEFAULT_MODEL }, prefs.get("n1.
 const gen = Object.assign({ kind: "grammar_blank", count: 5, topic: "", weak: true }, prefs.get("n1.gen", {}));
 if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
 let current = null;
-let notes = [], cards = [], history = [];
+let notes = [], cards = [], history = [], answers = [];
 const cardIds = new Set();
 let busy = null, lastError = "", toastTimer = null;
 let persist = "unsupported";
@@ -383,6 +384,212 @@ function renderCardList(){
   }
 }
 
+/* ---------- 면접 · 내 답변 노트 ---------- */
+const iv = Object.assign({ cat: "all", draft: null }, prefs.get("n1.interview", {}));
+const saveIv = () => prefs.set("n1.interview", iv);
+const ansOpen = new Set(), memo = new Map();          // memo: 답변 id → 보이는 문장 번호 Set (외우기 모드)
+let ivConfirmDel = null, fuBusy = null, fuError = null;
+const TIMER_OPTS = [[30, "30초"], [60, "1분"], [90, "1분30초"], [120, "2분"]];
+let timer = null;                                     // { id, acc, since, buzzed } since가 null이면 일시정지
+
+const charCount = t => t.replace(/\s/g, "").length;
+const estSec = n => Math.round(n / 300 * 60);         // 1분 ≈ 300자
+const fmtSec = s => s >= 60 ? `${Math.floor(s / 60)}분${s % 60 ? ` ${s % 60}초` : ""}` : `${s}초`;
+function sentences(text){
+  const out = [];
+  for (const line of text.split(/\n+/))
+    for (const s of line.match(/[^。！？!?]+[。！？!?]+[」』）)]*|[^。！？!?]+$/g) || []) if (s.trim()) out.push(s.trim());
+  return out;
+}
+function renderIvCount(){ $("iv-count").textContent = answers.length; }
+
+function openDraft({ cat, question = "", text = "", editingId = null }){
+  iv.draft = { cat: CAT[cat] ? cat : (CAT[iv.cat] ? iv.cat : CATS[0].key), question, text, editingId };
+  saveIv(); renderInterview();
+  const form = $("ans-form");
+  form?.scrollIntoView({ behavior: "smooth", block: "start" });
+  (question ? $("ans-text") : $("ans-q"))?.focus({ preventScroll: true });
+}
+async function saveDraft(){
+  const d = iv.draft;
+  if (!d.question.trim() || !d.text.trim()){ toast("질문과 답변을 모두 입력하세요"); return; }
+  const old = d.editingId ? answers.find(a => a.id === d.editingId) : null;
+  const now = Date.now();
+  const rec = { ...(old || { id: now.toString(36) + Math.random().toString(36).slice(2, 6), at: now, timerSec: 60, followups: null }),
+    cat: d.cat, question: d.question.trim(), text: d.text.trim(), updatedAt: now };
+  try { await db.put("answers", rec); } catch { toast("저장하지 못했어요. 기기 저장소를 확인하세요."); return; }
+  answers = [rec, ...answers.filter(a => a.id !== rec.id)].sort((a, b) => b.at - a.at);
+  if (iv.cat !== "all" && iv.cat !== rec.cat) iv.cat = "all";
+  iv.draft = null; saveIv();
+  ansOpen.add(rec.id); memo.delete(rec.id);
+  ensurePersist(); toast(old ? "수정했어요" : "저장했어요");
+  renderInterview();
+}
+
+function renderInterview(){
+  const v = $("view-iv"); v.replaceChildren();
+  renderIvCount();
+  v.append(answerNotes());
+}
+function answerNotes(){
+  const box = h("div", { class: "stack" });
+  if (iv.draft) box.append(answerForm());
+  else box.append(h("section", { class: "panel row" },
+    h("button", { class: "btn primary", onclick: () => openDraft({}) }, "+ 답변 추가"),
+    h("span", { class: "hint", text: "써 둔 일본어 답변을 붙여 넣어 저장하고, 외우기·타이머로 연습해요." })));
+  if (!answers.length){
+    if (!iv.draft) box.append(h("div", { class: "panel empty" }, h("p", { text: "아직 저장한 답변이 없어요." }),
+      h("p", { class: "hint", text: "自己紹介, 志望動機처럼 자주 나오는 질문의 답변을 저장해 두면, 문장을 가리고 외우거나 시간을 재며 연습할 수 있어요." })));
+    return box;
+  }
+  if (!CAT[iv.cat] && iv.cat !== "all") iv.cat = "all";
+  const filters = h("div", { class: "chips" });
+  for (const [key, label] of [["all", "전체"], ...CATS.map(c => [c.key, c.jp])]){
+    const n = key === "all" ? answers.length : answers.filter(a => a.cat === key).length;
+    if (!n && key !== iv.cat) continue;
+    filters.append(h("button", { class: "chip", lang: key === "all" ? null : "ja", "aria-pressed": String(iv.cat === key), onclick: () => { iv.cat = key; saveIv(); renderInterview(); } }, label, h("small", { text: String(n) })));
+  }
+  box.append(filters);
+  const list = h("div", { class: "stack" });
+  for (const a of answers) if (iv.cat === "all" || a.cat === iv.cat) list.append(answerItem(a));
+  box.append(list);
+  return box;
+}
+function answerForm(){
+  const d = iv.draft, cat = CAT[d.cat] || CATS[0];
+  const f = h("section", { class: "panel stack", id: "ans-form" }, h("div", { class: "label", text: d.editingId ? "답변 수정" : "답변 추가" }));
+  f.append(h("div", null, h("div", { class: "label", text: "질문 유형" }),
+    h("div", { class: "chips" }, CATS.map(c => h("button", { class: "chip", type: "button", "aria-pressed": String(d.cat === c.key), onclick: () => { d.cat = c.key; saveIv(); renderInterview(); } },
+      h("span", { lang: "ja", text: c.jp }), h("small", { text: c.ko }))))));
+  const qIn = h("input", { id: "ans-q", type: "text", lang: "ja", placeholder: "면접 질문 (일본어)", value: d.question, oninput: e => { d.question = e.target.value; saveIv(); } });
+  f.append(h("label", { class: "field", for: "ans-q" }, h("span", { class: "label", text: "질문" }), qIn));
+  if (cat.questions.length) f.append(h("div", { class: "chips presets" }, cat.questions.map(q =>
+    h("button", { class: "chip", type: "button", lang: "ja", onclick: () => { d.question = q; qIn.value = q; saveIv(); } }, q))));
+  const count = h("span", { class: "hint mono" });
+  const paintCount = () => { const n = charCount(d.text); count.textContent = `${n}자 · 약 ${fmtSec(estSec(n))} (1분 ≈ 300자)`; };
+  const ta = h("textarea", { id: "ans-text", lang: "ja", rows: "9", placeholder: "써 둔 일본어 답변을 붙여 넣으세요", oninput: e => { d.text = e.target.value; saveIv(); paintCount(); } });
+  ta.value = d.text; paintCount();
+  f.append(h("label", { class: "field", for: "ans-text" }, h("span", { class: "label", text: "내 답변" }), ta), count);
+  f.append(h("div", { class: "row" },
+    h("button", { class: "btn primary", onclick: saveDraft }, "저장"),
+    h("button", { class: "btn ghost", onclick: () => { iv.draft = null; saveIv(); renderInterview(); } }, "취소")));
+  return f;
+}
+function answerItem(a){
+  const det = h("details", { class: "note-item" });
+  det.open = ansOpen.has(a.id);
+  det.addEventListener("toggle", () => { det.open ? ansOpen.add(a.id) : ansOpen.delete(a.id); });
+  const n = charCount(a.text);
+  det.append(h("summary", null,
+    h("div", { class: "meta" }, h("span", { class: "tag", lang: "ja", text: CAT[a.cat]?.jp || "その他" }),
+      h("span", { class: "mono", text: `${n}자 · 약 ${fmtSec(estSec(n))}` }),
+      a.followups?.items.length ? h("span", { text: `꼬리 질문 ${a.followups.items.length}` }) : null),
+    h("div", { class: "stemline", lang: "ja", text: a.question })));
+  const body = h("div", { class: "note-body" });
+
+  /* 답변 · 외우기 */
+  const m = memo.get(a.id);
+  if (!m) body.append(h("p", { class: "ans-text", lang: "ja", text: a.text }));
+  else {
+    const list = sentences(a.text);
+    body.append(h("div", { class: "memo" }, list.map((s, i) => {
+      const shown = m.has(i);
+      return h("button", { class: "memo-s" + (shown ? " shown" : ""), type: "button", lang: shown ? "ja" : null, "aria-pressed": String(shown),
+        onclick: () => { shown ? m.delete(i) : m.add(i); renderInterview(); } }, shown ? s : `${i + 1} · 탭해서 보기 (${charCount(s)}자)`);
+    })));
+  }
+  const memoRow = h("div", { class: "row" });
+  if (!m) memoRow.append(h("button", { class: "btn small", onclick: () => { memo.set(a.id, new Set()); renderInterview(); } }, "외우기"));
+  else {
+    const total = sentences(a.text).length;
+    memoRow.append(
+      h("button", { class: "btn small primary", disabled: m.size >= total, onclick: () => { for (let i = 0; i < total; i++) if (!m.has(i)){ m.add(i); break; } renderInterview(); } }, "다음 문장"),
+      h("button", { class: "btn small", onclick: () => { for (let i = 0; i < total; i++) m.add(i); renderInterview(); } }, "모두 보기"),
+      h("button", { class: "btn small", onclick: () => { m.clear(); renderInterview(); } }, "다시 가리기"),
+      h("button", { class: "btn small ghost", onclick: () => { memo.delete(a.id); renderInterview(); } }, "외우기 끝"),
+      h("span", { class: "hint mono", text: `${m.size} / ${total}문장` }));
+  }
+  body.append(memoRow, timerNode(a), followupNode(a));
+
+  /* 수정 · 삭제 */
+  const acts = h("div", { class: "confirm" }, h("button", { class: "btn small", onclick: () => openDraft({ cat: a.cat, question: a.question, text: a.text, editingId: a.id }) }, "수정"));
+  if (ivConfirmDel !== a.id) acts.append(h("button", { class: "btn small ghost", onclick: () => { ivConfirmDel = a.id; renderInterview(); } }, "삭제"));
+  else acts.append(h("span", { text: "이 답변을 지울까요? 백업이 없다면 되돌릴 수 없어요." }),
+    h("button", { class: "btn small", onclick: async () => {
+      await db.del("answers", a.id); answers = answers.filter(x => x.id !== a.id);
+      ivConfirmDel = null; memo.delete(a.id); if (timer?.id === a.id) timer = null; renderInterview(); } }, "지우기"),
+    h("button", { class: "btn small ghost", onclick: () => { ivConfirmDel = null; renderInterview(); } }, "취소"));
+  body.append(acts);
+  det.append(body);
+  return det;
+}
+
+/* 타이머: 한 번에 하나. 답변마다 마지막으로 고른 시간(timerSec)을 기억한다. */
+const timerElapsed = () => timer ? timer.acc + (timer.since != null ? Date.now() - timer.since : 0) : 0;
+function paintTimer(el, a){
+  const left = (a.timerSec || 60) * 1000 - (timer?.id === a.id ? timerElapsed() : 0);
+  const over = left < 0;
+  el.textContent = over ? "+" + fmtTime(-left) : fmtTime(left + 999);
+  el.classList.toggle("over", over);
+}
+function toggleTimer(a){
+  if (!timer || timer.id !== a.id) timer = { id: a.id, acc: 0, since: Date.now(), buzzed: false };
+  else if (timer.since != null){ timer.acc += Date.now() - timer.since; timer.since = null; }
+  else timer.since = Date.now();
+  renderInterview();
+}
+function timerNode(a){
+  const total = a.timerSec || 60, mine = timer?.id === a.id, running = mine && timer.since != null;
+  const disp = h("span", { class: "timer-n mono", id: "timer-" + a.id, role: "timer" });
+  paintTimer(disp, a);
+  return h("div", { class: "timer" },
+    h("div", { class: "chips" }, TIMER_OPTS.map(([sec, label]) => h("button", { class: "chip", type: "button", "aria-pressed": String(total === sec),
+      onclick: async () => { a.timerSec = sec; if (mine) timer = null; renderInterview(); await db.put("answers", a).catch(() => {}); } }, label))),
+    h("div", { class: "row" }, disp,
+      h("button", { class: "btn small primary", onclick: () => toggleTimer(a) }, running ? "일시정지" : mine ? "계속" : "시작"),
+      mine ? h("button", { class: "btn small ghost", onclick: () => { timer = null; renderInterview(); } }, "초기화") : null,
+      h("span", { class: "hint", text: `이 답변 약 ${fmtSec(estSec(charCount(a.text)))}` })));
+}
+function tickTimer(){
+  if (!timer || timer.since == null) return;
+  const a = answers.find(x => x.id === timer.id), el = $("timer-" + timer.id);
+  if (a && el) paintTimer(el, a);
+  if (a && !timer.buzzed && timerElapsed() >= (a.timerSec || 60) * 1000){ timer.buzzed = true; try { navigator.vibrate?.(200); } catch {} }
+}
+setInterval(tickTimer, 250);
+document.addEventListener("visibilitychange", tickTimer);   // 백그라운드에서 늦어진 표시를 돌아오자마자 맞춘다
+
+/* 예상 꼬리 질문: 버튼을 누를 때만 질문과 답변을 Gemini로 보낸다 */
+async function makeFollowups(a){
+  if (fuBusy) return;
+  const ctl = new AbortController();
+  fuBusy = { id: a.id, ctl }; fuError = null; renderInterview();
+  try {
+    const raw = await callGemini(buildFollowupPrompt(CAT[a.cat]?.jp, a.question, a.text), { key: settings.key, model: settings.model, signal: ctl.signal });
+    a.followups = { at: Date.now(), model: (settings.model || DEFAULT_MODEL).trim(), items: normalizeFollowups(raw) };
+    await db.put("answers", a);
+  } catch (e){
+    if (!(e && e.name === "AbortError")) fuError = { id: a.id, msg: e?.message || "꼬리 질문을 만들지 못했어요." };
+  } finally { fuBusy = null; renderInterview(); }
+}
+function followupNode(a){
+  const sec = h("div", { class: "fu-box" }, h("div", { class: "label", text: "예상 꼬리 질문" }));
+  if (a.followups?.items.length) sec.append(h("ol", { class: "fu" }, a.followups.items.map(f => h("li", null,
+    h("div", { class: "fu-q", lang: "ja", text: f.q }),
+    f.ko ? h("div", { class: "hint", text: f.ko }) : null,
+    f.intent ? h("div", { class: "fu-n" }, h("b", { text: "의도 " }), f.intent) : null,
+    f.point ? h("div", { class: "fu-n" }, h("b", { text: "답변 포인트 " }), f.point) : null,
+    h("div", null, h("button", { class: "btn small ghost", onclick: () => openDraft({ cat: a.cat, question: f.q }) }, "이 질문으로 답변 추가"))))));
+  const row = h("div", { class: "row" });
+  if (fuBusy?.id === a.id) row.append(h("div", { class: "status" }, h("span", { class: "spin" }), h("span", { text: "Gemini가 꼬리 질문을 만드는 중" }),
+    h("button", { class: "btn small", onclick: () => fuBusy?.ctl.abort() }, "중지")));
+  else row.append(h("button", { class: "btn small" + (a.followups ? "" : " primary"), disabled: !!fuBusy, onclick: () => makeFollowups(a) }, a.followups ? "다시 만들기" : "예상 꼬리 질문 만들기"),
+    h("span", { class: "hint", text: `오늘 ${callsToday()}회 호출` }));
+  sec.append(row, h("p", { class: "hint", text: "이 버튼을 누를 때만 질문과 답변이 Google(Gemini)로 전송돼요." }));
+  if (fuError?.id === a.id) sec.append(h("div", { class: "status err", role: "alert", text: fuError.msg }));
+  return sec;
+}
+
 /* ---------- 기록 · 설정 ---------- */
 let showKey = false;
 async function renderSettings(){
@@ -415,7 +622,7 @@ async function renderSettings(){
   /* 기기 저장 · 백업 */
   persist = await persistState();
   const store = h("section", { class: "panel stack" }, h("div", { class: "label", text: "이 기기에 저장된 데이터" }),
-    h("p", null, `오답노트 ${notes.length}개 · 단어장 ${cards.length}개 · 학습 기록 ${history.length}개`),
+    h("p", null, `오답노트 ${notes.length}개 · 단어장 ${cards.length}개 · 학습 기록 ${history.length}개 · 면접 답변 ${answers.length}개`),
     h("p", { class: "hint" }, persist === "granted"
       ? "영구 저장이 허용돼 있어요. 브라우저가 공간 정리를 할 때도 지워지지 않아요."
       : "브라우저가 공간이 부족할 때 데이터를 지울 수 있어요. 홈 화면에 설치하면 더 안전하고, 가끔 백업 파일을 내보내 두세요.",
@@ -465,22 +672,23 @@ async function doImport(e){
 }
 
 /* ---------- tabs ---------- */
-const TABS = ["solve", "note", "cards", "set"];
+const TABS = ["solve", "note", "cards", "iv", "set"];
 function showTab(name){
   for (const t of TABS){ $("tab-" + t).setAttribute("aria-selected", String(t === name)); $("view-" + t).hidden = t !== name; }
   try { sessionStorage.setItem("n1.tab", name); } catch {}
   if (name === "note") renderNote();
   if (name === "cards") renderCards();
   if (name === "set") renderSettings();
+  if (name === "iv") renderInterview();
   if (name === "solve") renderSolve();
   window.scrollTo({ top: 0 });
 }
-function renderAll(){ renderSolve(); renderNoteCount(); renderCardsCount(); }
+function renderAll(){ renderSolve(); renderNoteCount(); renderCardsCount(); renderIvCount(); }
 
 /* ---------- boot ---------- */
 async function loadAll(){
-  [notes, cards, history] = await Promise.all([db.all("notes"), db.all("cards"), db.all("history")]);
-  notes.sort((a, b) => b.at - a.at); cards.sort((a, b) => b.at - a.at);
+  [notes, cards, history, answers] = await Promise.all([db.all("notes"), db.all("cards"), db.all("history"), db.all("answers")]);
+  notes.sort((a, b) => b.at - a.at); cards.sort((a, b) => b.at - a.at); answers.sort((a, b) => b.at - a.at);
   cardIds.clear(); for (const c of cards) cardIds.add(c.id);
 }
 async function boot(){

@@ -6,10 +6,13 @@
  *   cards   : 단어장(저장한 표현) { id, at, type: "kanji"|"grammar"|"compare", front, reading, meaning, extra, source }
  *   history : 풀이 기록          { id, at, kind, title, total, right, elapsedMs }
  *   meta    : 기타              { id: "current", value: <풀던 세트> }
+ *   answers : 내 답변 노트(면접)  { id, at, updatedAt, cat, question, text, timerSec, followups: null | { at, model, items: [{ q, ko, intent, point }] } }
+ *
+ * v2: answers 스토어 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
  */
 const DB_NAME = "n1-study";
-const DB_VERSION = 1;
-export const STORES = ["notes", "cards", "history", "meta"];
+const DB_VERSION = 2;
+export const STORES = ["notes", "cards", "history", "meta", "answers"];
 
 let dbPromise = null;
 
@@ -21,7 +24,7 @@ function open(){
       const db = req.result;
       for (const name of STORES) if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: "id" });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => { const db = req.result; db.onversionchange = () => { db.close(); dbPromise = null; }; resolve(db); };   // 다른 탭의 업그레이드를 막지 않게(다음 요청 때 다시 연다)
     req.onerror = () => reject(req.error);
   });
   return dbPromise;

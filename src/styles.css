@@ -169,3 +169,29 @@ code{font-family:var(--mono);font-size:.9em;background:var(--ai-soft);padding:1p
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--sheet);padding:9px 16px;border-radius:99px;font-size:13.5px;z-index:20;max-width:calc(100% - 32px)}
 .warn{background:var(--ng-soft);border:1px solid var(--ng);border-radius:8px;padding:10px 14px;font-size:13.5px;margin-bottom:14px}
 label.btn{display:inline-block;cursor:pointer}
+
+/* ---- 면접 탭: 내 답변 노트 ---- */
+nav.tabs{overflow-x:auto;scrollbar-width:none}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{flex:none;white-space:nowrap}
+.field textarea{width:100%;border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:10px 12px;min-height:200px;resize:vertical;font:400 16px/1.85 var(--mincho)}
+.presets .chip{font-family:var(--mincho);text-align:left}
+.ans-text{margin:0;white-space:pre-wrap;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:12px 14px;font:400 16.5px/1.95 var(--mincho)}
+.memo{display:grid;gap:6px}
+.memo-s{width:100%;text-align:left;border:1px dashed var(--line);background:var(--paper);border-radius:6px;padding:10px 12px;min-height:44px;font-size:13px;color:var(--muted)}
+.memo-s.shown{border-style:solid;background:var(--sheet);color:var(--ink);font:400 16.5px/1.85 var(--mincho)}
+.timer{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.timer-n{font-size:26px;font-weight:500;min-width:5.5ch}
+.timer-n.over{color:var(--ng)}
+.fu-box{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.fu-box .label,.fu-box p{margin:0}
+.fu{margin:0;padding-left:1.4em;display:grid;gap:10px}
+.fu li{padding-left:2px}
+.fu-q{font:400 16px/1.75 var(--mincho)}
+.fu-n{font-size:13.5px}
+.fu-n b{font-weight:600;color:var(--ai);font-size:12px;margin-right:4px}
+@media (max-width:480px){
+  nav.tabs{gap:0}
+  nav.tabs button{padding:10px 6px 9px}
+  nav.tabs .count{margin-left:3px;padding:1px 5px}
+}

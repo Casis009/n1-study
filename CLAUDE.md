@@ -19,16 +19,17 @@ python3 -m http.server 8000      # 또는: npx serve .
 ## 구조
 
 ```
-index.html             화면 뼈대, 탭 4개(문제 / 오답노트 / 단어장 / 기록·설정)
+index.html             화면 뼈대, 탭 5개(문제 / 오답노트 / 단어장 / 면접 / 기록·설정)
 manifest.webmanifest   PWA(홈 화면 설치)
 sw.js                  오프라인 캐시. 앱 파일을 고치면 VERSION을 올릴 것
 src/main.js            상태와 렌더링 전부 (탭별 render* 함수)
 src/kinds.js           N1 1교시 12개 문제 유형 정의, 주제 목록, 시험일
-src/prompt.js          문제 생성 프롬프트 (출력 JSON 스키마 포함)
+src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱
 src/gemini.js          Gemini REST 호출, 하루 호출 수 카운터, 한도 초기화 시각
 src/db.js              IndexedDB 래퍼, 백업 내보내기/불러오기, 영구 저장 요청
 src/samples.js         직접 작성한 예시 세트(어휘·문법·독해). API 없이도 화면 확인 가능
+src/interview.js       면접 질문 유형과 유형별 예시 질문(직접 작성)
 src/dom.js             h() DOM 도우미, prefs(localStorage), 시간 포맷
 src/styles.css         디자인 토큰(:root) + 라이트/다크 테마
 docs/                  기획 메모, N1 형식 정리
@@ -36,8 +37,8 @@ docs/                  기획 메모, N1 형식 정리
 
 ## 데이터
 
-- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`). 스키마는 `src/db.js` 상단 주석.
-- **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수).
+- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2에서 추가). 스키마는 `src/db.js` 상단 주석.
+- **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수), `n1.interview`(답변 노트 필터·쓰던 답변).
 - 백업 JSON(`app: "n1-study"`, `version: 1`)에는 notes/cards/history만 들어가고 **API 키는 절대 넣지 않는다.**
 - 스토어 구조를 바꾸면 `DB_VERSION`을 올리고 `onupgradeneeded`에서 마이그레이션.
 
@@ -77,6 +78,12 @@ docs/                  기획 메모, N1 형식 정리
 ## 다음 할 일 후보
 
 1. 실제 Gemini 응답으로 12개 유형을 하나씩 생성해 보고 프롬프트 품질 다듬기 (특히 用法, 情報検索, 文章の文法)
-2. 일본어 면접 대비 탭: 질문 패턴(自己紹介, 志望動機, 長所・短所, 逆質問) + 답변 첨삭 + 비즈니스 경어 상황 카드
+2. 일본어 면접 대비 탭: 내 답변 노트(써 둔 답변 저장, 문장 가리고 외우기, 30초~2분 타이머, 예상 꼬리 질문 5개) 완료. 답변 첨삭은 하지 않기로 함(답변은 사용자가 이미 작성)
 3. 단어장 간격 반복(SRS) 복습
 4. 시험 후: Flutter 앱으로 전환 검토 (iOS 빌드는 Mac 필요, 배포 조건은 docs/planning.md)
+
+## 면접 탭 메모
+
+- 내 답변 노트: 답변 텍스트는 이 기기에만 저장. **[예상 꼬리 질문 만들기]를 누를 때만** 질문과 답변을 Gemini로 보낸다(화면에 안내 문구 유지).
+- 글자 수는 공백·줄바꿈 제외, 예상 시간은 1분 ≈ 300자 기준. 타이머 시간은 답변마다 `timerSec`으로 기억.
+- 외우기 모드는 。！？와 줄바꿈 기준으로 문장을 나눈다(`sentences()` in main.js).

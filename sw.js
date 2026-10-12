@@ -3,11 +3,11 @@
  * 앱 파일은 캐시해서 오프라인에서도 열리게 하고(오답노트·단어장 열람), Gemini API 요청은 절대 캐시하지 않는다.
  * 앱 파일을 고치면 VERSION을 올려야 사용자 기기에 새 버전이 반영된다.
  */
-const VERSION = "n1-study-v2";
+const VERSION = "n1-study-v3";
 const SHELL = [
   "./", "./index.html", "./manifest.webmanifest",
   "./src/styles.css", "./src/main.js", "./src/dom.js", "./src/db.js", "./src/sets.js",
-  "./src/prompt.js", "./src/gemini.js", "./src/kinds.js", "./src/samples.js",
+  "./src/prompt.js", "./src/gemini.js", "./src/kinds.js", "./src/samples.js", "./src/interview.js",
   "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./icons/apple-touch-icon.png"
 ];
 
