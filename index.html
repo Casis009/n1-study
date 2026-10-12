@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>N1 연습장</title>
+<meta name="description" content="JLPT N1 1교시 전 유형을 AI로 만들어 풀고 해설·오답노트·단어장을 기기에 저장하는 연습장">
+<meta name="theme-color" content="#2d4a8c" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#11151d" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="N1 연습장">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans+KR:wght@400;500;600&family=Zen+Old+Mincho:wght@400;700&display=swap">
+<link rel="stylesheet" href="./src/styles.css">
+<style>
+  :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+  body{margin:0}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>N1 연습장</h1>
+      <p>1교시 전 유형 · 풀고 나서 해설 · 기록은 이 기기에</p>
+    </div>
+    <div class="dday" id="dday"></div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-solve" aria-selected="true">문제</button>
+    <button role="tab" id="tab-note" aria-selected="false">오답노트<span class="count" id="note-count">0</span></button>
+    <button role="tab" id="tab-cards" aria-selected="false">단어장<span class="count" id="card-count">0</span></button>
+    <button role="tab" id="tab-set" aria-selected="false">기록·설정</button>
+  </nav>
+
+  <div class="warn" id="db-warn" hidden>이 브라우저에서는 기기 저장소를 열 수 없어요(사파리 개인정보 보호 모드 등). 문제는 풀 수 있지만 오답노트와 단어장이 저장되지 않아요.</div>
+
+  <main id="view-solve"></main>
+  <main id="view-note" hidden></main>
+  <main id="view-cards" hidden></main>
+  <main id="view-set" hidden></main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+<noscript>이 앱은 자바스크립트가 필요해요.</noscript>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

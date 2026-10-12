@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+*.log
+# 백업 파일에는 개인 학습 기록이 들어 있으니 저장소에 올리지 않기
+n1-backup-*.json
+.env
+scratch/
