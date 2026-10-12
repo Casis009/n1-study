@@ -67,15 +67,21 @@ export async function persistState(){
   } catch { return "unsupported"; }
 }
 
-/* 백업: 기기 데이터를 JSON 하나로 내보내고, 불러올 때는 id 기준으로 합친다. */
+/*
+ * 백업: 기기 데이터를 JSON 하나로 내보내고, 불러올 때는 id 기준으로 합친다. API 키는 넣지 않는다.
+ * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트). v1 파일도 그대로 불러올 수 있다.
+ */
+export const BACKUP_VERSION = 2;
+const BACKUP_STORES = ["notes", "cards", "history", "answers"];
 export async function exportAll(){
-  const [notes, cards, history] = await Promise.all([db.all("notes"), db.all("cards"), db.all("history")]);
-  return { app: "n1-study", version: 1, exportedAt: new Date().toISOString(), notes, cards, history };
+  const [notes, cards, history, answers] = await Promise.all(BACKUP_STORES.map(s => db.all(s)));
+  return { app: "n1-study", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), notes, cards, history, answers };
 }
 export async function importAll(data){
   if (!data || data.app !== "n1-study") throw new Error("N1 연습장 백업 파일이 아니에요.");
+  if (Number(data.version) > BACKUP_VERSION) throw new Error("더 새 버전 앱에서 만든 백업이에요. 앱을 새로고침해 최신 버전으로 바꾼 뒤 불러오세요.");
   const counts = {};
-  for (const store of ["notes", "cards", "history"]){
+  for (const store of BACKUP_STORES){
     const rows = Array.isArray(data[store]) ? data[store].filter(r => r && r.id) : [];
     if (rows.length) await db.putMany(store, rows);
     counts[store] = rows.length;

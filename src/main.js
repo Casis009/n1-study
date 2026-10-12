@@ -668,7 +668,7 @@ async function renderSettings(){
       h("button", { class: "btn", onclick: doExport }, "백업 파일 내보내기"),
       h("label", { class: "btn", for: "import-file" }, "백업 불러오기"),
       h("input", { id: "import-file", type: "file", accept: "application/json,.json", hidden: true, onchange: doImport })),
-    h("p", { class: "hint", text: "백업 파일로 휴대폰 ↔ PC 사이에 오답노트와 단어장을 옮길 수 있어요. 불러오면 기존 데이터와 합쳐져요." }));
+    h("p", { class: "hint", text: "백업 파일로 휴대폰 ↔ PC 사이에 오답노트·단어장·학습 기록·면접 답변을 옮길 수 있어요. 불러오면 기존 데이터와 합쳐져요. (API 키는 들어가지 않아요)" }));
   v.append(store);
 
   /* Gemini */
@@ -702,7 +702,7 @@ async function doImport(e){
   try {
     const counts = await importAll(JSON.parse(await file.text()));
     await loadAll();
-    toast(`불러왔어요: 오답 ${counts.notes} · 단어 ${counts.cards} · 기록 ${counts.history}`);
+    toast(`불러왔어요: 오답 ${counts.notes} · 단어 ${counts.cards} · 기록 ${counts.history} · 답변 ${counts.answers}`);
     renderAll(); renderSettings();
   } catch (err){ toast(err?.message || "백업 파일을 읽지 못했어요."); }
   e.target.value = "";

@@ -40,7 +40,7 @@ docs/                  기획 메모, N1 형식 정리
 
 - **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2에서 추가). 스키마는 `src/db.js` 상단 주석.
 - **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수), `n1.interview`(답변 노트 필터·쓰던 답변).
-- 백업 JSON(`app: "n1-study"`, `version: 1`)에는 notes/cards/history만 들어가고 **API 키는 절대 넣지 않는다.**
+- 백업 JSON(`app: "n1-study"`, `version: 2`)에는 notes/cards/history/answers만 들어가고 **API 키는 절대 넣지 않는다.** v1(answers 없음) 파일도 불러올 수 있고, 앱보다 새 version은 거부한다. 스토어를 백업에 추가하면 `BACKUP_VERSION`(db.js)을 올릴 것.
 - 스토어 구조를 바꾸면 `DB_VERSION`을 올리고 `onupgradeneeded`에서 마이그레이션.
 
 ## 문제 데이터 형식 (prompt.js ↔ sets.js가 공유)
