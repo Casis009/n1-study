@@ -7,6 +7,7 @@ import { KINDS, TOPICS, EXAM } from "./kinds.js";
 import { SAMPLES } from "./samples.js";
 import { prepSet, normalizeFollowups } from "./sets.js";
 import { CATS, CAT } from "./interview.js";
+import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
@@ -332,7 +333,7 @@ function renderNote(){
 }
 
 /* ---------- 단어장 ---------- */
-const CARD_TYPES = { all: "전체", kanji: "한자", grammar: "문법", compare: "비슷한 말" };
+const CARD_TYPES = { all: "전체", kanji: "한자", grammar: "문법", compare: "비슷한 말", keigo: "경어" };
 let cardFilter = "all", cardQuery = "", hideMeaning = false;
 const revealed = new Set();
 function renderCardsCount(){ $("card-count").textContent = cards.length; }
@@ -385,7 +386,7 @@ function renderCardList(){
 }
 
 /* ---------- 면접 · 내 답변 노트 ---------- */
-const iv = Object.assign({ cat: "all", draft: null }, prefs.get("n1.interview", {}));
+const iv = Object.assign({ mode: "notes", cat: "all", scene: "all", cover: false, draft: null }, prefs.get("n1.interview", {}));
 const saveIv = () => prefs.set("n1.interview", iv);
 const ansOpen = new Set(), memo = new Map();          // memo: 답변 id → 보이는 문장 번호 Set (외우기 모드)
 let ivConfirmDel = null, fuBusy = null, fuError = null;
@@ -429,7 +430,43 @@ async function saveDraft(){
 function renderInterview(){
   const v = $("view-iv"); v.replaceChildren();
   renderIvCount();
-  v.append(answerNotes());
+  v.append(h("div", { class: "chips sub-tabs" },
+    h("button", { class: "chip", "aria-pressed": String(iv.mode !== "keigo"), onclick: () => { iv.mode = "notes"; saveIv(); renderInterview(); } }, "내 답변 노트", h("small", { text: String(answers.length) })),
+    h("button", { class: "chip", "aria-pressed": String(iv.mode === "keigo"), onclick: () => { iv.mode = "keigo"; saveIv(); renderInterview(); } }, "경어 카드", h("small", { text: String(KEIGO.length) }))));
+  v.append(iv.mode === "keigo" ? keigoCards() : answerNotes());
+}
+
+/* ---------- 면접 · 경어 상황 카드 ---------- */
+const keigoShown = new Set();
+function keigoCards(){
+  const box = h("div", { class: "stack" });
+  const top = h("section", { class: "panel stack" });
+  const chips = h("div", { class: "chips" });
+  for (const [key, label] of [["all", "전체"], ...Object.entries(SCENES)]){
+    const n = key === "all" ? KEIGO.length : KEIGO.filter(c => c.scene === key).length;
+    chips.append(h("button", { class: "chip", lang: key === "all" ? null : "ja", "aria-pressed": String(iv.scene === key), onclick: () => { iv.scene = key; saveIv(); renderInterview(); } }, label, h("small", { text: String(n) })));
+  }
+  const cover = h("input", { id: "keigo-cover", type: "checkbox", onchange: e => { iv.cover = e.target.checked; keigoShown.clear(); saveIv(); renderInterview(); } });
+  cover.checked = iv.cover;
+  top.append(chips, h("div", { class: "row" },
+    h("label", { class: "check", for: "keigo-cover" }, cover, "표현 가리기 (탭하면 보여요)"),
+    h("span", { class: "hint", text: "☆를 누르면 단어장(경어)에 저장돼요." })));
+  box.append(top);
+  const list = h("div", { class: "card-list" });
+  for (const c of KEIGO) if (iv.scene === "all" || c.scene === iv.scene){
+    const hidden = iv.cover && !keigoShown.has(c.id);
+    const source = "경어 카드 · " + SCENES[c.scene];
+    list.append(h("article", { class: "card keigo" + (hidden ? " covered" : ""),
+      onclick: () => { if (iv.cover){ keigoShown.has(c.id) ? keigoShown.delete(c.id) : keigoShown.add(c.id); renderInterview(); } } },
+      h("div", { class: "card-top" }, h("span", { class: "tag", lang: "ja", text: SCENES[c.scene] }), h("b", { class: "sit", text: c.sit }),
+        starBtn("keigo", { word: c.jp, meaning: c.sit, note: c.note + (c.ng ? ` ✕ ${c.ng}` : "") }, source)),
+      hidden ? h("div", { class: "hint", text: "탭해서 표현 보기" }) : h("div", { class: "card-body" },
+        h("div", { class: "kg-jp", lang: "ja", text: c.jp }),
+        h("div", { text: c.note }),
+        c.ng ? h("div", { class: "kg-ng" }, h("span", { class: "x", text: "✕" }), h("span", { class: "jp", lang: "ja", text: c.ng }), c.ngWhy ? h("span", { class: "why", text: c.ngWhy }) : null) : null)));
+  }
+  box.append(list);
+  return box;
 }
 function answerNotes(){
   const box = h("div", { class: "stack" });

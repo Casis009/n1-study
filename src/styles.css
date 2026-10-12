@@ -195,3 +195,13 @@ nav.tabs button{flex:none;white-space:nowrap}
   nav.tabs button{padding:10px 6px 9px}
   nav.tabs .count{margin-left:3px;padding:1px 5px}
 }
+
+/* ---- 면접 탭: 경어 카드 ---- */
+.sub-tabs{margin-bottom:14px}
+.card.keigo .sit{font-size:15px;font-weight:600}
+.card.keigo .card-top .star-btn{margin-left:auto}
+.kg-jp{font:400 17px/1.8 var(--mincho)}
+.kg-ng{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;background:var(--ng-soft);border-radius:6px;padding:6px 10px;font-size:13.5px}
+.kg-ng .x{color:var(--ng);font-weight:600}
+.kg-ng .jp{text-decoration:line-through;text-decoration-color:var(--ng)}
+.kg-ng .why{flex-basis:100%;color:var(--muted)}
