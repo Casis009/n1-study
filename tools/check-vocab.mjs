@@ -80,7 +80,7 @@ if (existsSync(BANK)) for (const f of readdirSync(BANK).filter(f => f.endsWith("
   const data = JSON.parse(readFileSync(new URL(f, BANK), "utf8"));
   const missing = new Set();
   for (const u of data.units) for (const q of u.questions) for (const t of q.patternTags || [])
-    if (target === "grammar" ? !keys.grammar.has(t) : !(keys.kanji.has(t) || keys.words.has(t))) missing.add(t);
+    if (target === "grammar" ? (t.startsWith("〜") && !keys.grammar.has(t)) : !(keys.kanji.has(t) || keys.words.has(t))) missing.add(t);   // 文章の文法의 유형 태그(接続表現 등)는 제외
   if (missing.size) warns.push(`문제은행 ${f}의 patternTags가 단어장에 없음: ${[...missing].join(" ")}`);
 }
 
