@@ -13,6 +13,7 @@ import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal } from "./bank.js";
+import { hasKanji, rubyParts } from "./furigana.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
 
 const GROUPS = ["문자·어휘", "문법", "독해"];
@@ -147,6 +148,14 @@ function glossNodes(text, gl){
   if (buf) out.push(buf);
   return out;
 }
+/* 문법 표제어 후리가나: 한자 덩어리 위에만 <ruby>. 정렬이 안 되면 뒤에 （읽기）. hide면 읽기를 감춘다(뜻 가리기) */
+function rubyNode(text, reading, { cls = null, hide = false } = {}){
+  const el = h("b", { class: cls, lang: "ja" });
+  const parts = hide ? null : rubyParts(text, reading);
+  if (parts) for (const p of parts) el.append(p.r ? h("ruby", null, p.t, h("rt", { text: p.r })) : p.t);
+  else el.append(text, !hide && reading && hasKanji(text) ? h("span", { class: "r", text: `（${reading}）` }) : "");
+  return el;
+}
 const glossOf = (list, on, source) => on && list?.length ? { list: [...list].sort((a, b) => b.w.length - a.w.length), used: new Set(), source } : null;
 let glossPop = null;
 function closeGloss(){ glossPop?.remove(); glossPop = null; }
@@ -253,7 +262,7 @@ function explanationNode(q, source){
       starBtn("kanji", k, source))))));
   if (ex.grammar.length) box.append(h("section", null, h("h4", { text: "주요 문법" }),
     h("div", { class: "gram" }, ex.grammar.map(g => h("div", { class: "gr" },
-      h("div", { class: "gr-top" }, h("b", { lang: "ja", text: g.pattern }), h("span", { text: g.meaning ? "· " + g.meaning : "" }), starBtn("grammar", g, source)),
+      h("div", { class: "gr-top" }, rubyNode(g.pattern, g.reading), h("span", { text: g.meaning ? "· " + g.meaning : "" }), starBtn("grammar", g, source)),
       g.example ? h("div", { class: "ex-jp", text: g.example }) : null)))));
   if (ex.compare?.length) box.append(h("section", null, h("h4", { text: "비슷한 말 비교" }),
     h("div", { class: "cmp" }, ex.compare.map(c => h("div", null,
@@ -549,7 +558,7 @@ function vocabCard(kind, it, wrongN){
   const head = kind === "grammar" ? it.pattern : it.word;
   const showReading = kind !== "grammar" && !(hidden && kind === "kanji");
   card.append(h("div", { class: "card-top" },
-    h("b", { class: "front", lang: "ja", text: head }),
+    kind === "grammar" ? rubyNode(head, it.reading, { cls: "front", hide: hidden }) : h("b", { class: "front", lang: "ja", text: head }),
     showReading && it.reading ? h("span", { class: "r", lang: "ja", text: `（${it.reading}）` }) : null,
     kind === "words" && it.pos ? h("span", { class: "tag", text: it.pos }) : null,
     wrongN ? h("span", { class: "tag wrong", text: `자주 틀림 ×${wrongN}` }) : null,
@@ -564,7 +573,7 @@ function vocabCard(kind, it, wrongN){
   }
   body.append(h("div", { class: "extra", lang: "ja" }, glossNodes(it.example, glossOf(it.gloss, true, "기본 단어장"))), h("div", { class: "src", text: it.exampleKo }));
   if (kind === "grammar" && it.similar?.length) body.append(h("div", { class: "similar" }, it.similar.map(s =>
-    h("div", null, h("b", { lang: "ja", text: s.pattern }), h("span", { text: " — " + s.diff })))));
+    h("div", null, rubyNode(s.pattern, s.reading), h("span", { text: " — " + s.diff })))));
   if (kind === "grammar"){
     const n = tagUnitCount(it.pattern);
     body.append(h("div", null, h("button", { class: "btn small", disabled: !n, onclick: async e => { e.stopPropagation(); await solveTag(it.pattern); } },

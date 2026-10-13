@@ -256,3 +256,5 @@ nav.tabs button{flex:none;white-space:nowrap}
 .card-body .src b{font-weight:600;color:var(--ai);font-size:12px;margin-right:2px}
 .similar{display:grid;gap:4px;font-size:13.5px;border-top:1px solid var(--line);padding-top:6px}
 .similar b{font-family:var(--mincho);font-size:14.5px}
+ruby rt{font:400 .52em/1 var(--sans);color:var(--muted);letter-spacing:0}
+.card-top .front ruby rt{font-size:.5em}

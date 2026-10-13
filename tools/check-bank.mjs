@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { prepSet } from "../src/sets.js";
 import { KINDS } from "../src/kinds.js";
+import { readingErr } from "../src/furigana.js";
 
 const DIR = new URL("../data/bank/", import.meta.url);
 const hangul = s => /[가-힣]/.test(s || "");
@@ -88,6 +89,7 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
       else if (!ex.kanji.every(x => x.reading && hangul(x.meaning))) err(`${t} kanji 읽기/뜻 누락`);
       if (!k.vocab && !ex.grammar.length) warn(`${t} grammar 없음`);
       if (ex.grammar.some(g => !hangul(g.meaning) || !g.example)) err(`${t} grammar 뜻/예문 누락`);
+      for (const g of ex.grammar){ const e = readingErr(g); if (e) err(`${t} grammar「${g.pattern}」 ${e}`); }
       if (k.vocab && ex.compare.length < 2) err(`${t} compare ${ex.compare.length}개 (필수 2~4)`);
       if (ex.compare.some(c => !hangul(c.meaning) || !hangul(c.note))) err(`${t} compare 한국어 누락`);
       if (!hangul(ex.pattern)) err(`${t} pattern 없음`);

@@ -37,7 +37,7 @@ export function normalizeQ(q, oneBased){
       choicesKo: cko,
       why: asStr(ex.why),
       kanji: arr(ex.kanji).filter(k => k && k.word).map(k => ({ word: asStr(k.word), reading: asStr(k.reading), meaning: asStr(k.meaning) })).slice(0, 10),
-      grammar: arr(ex.grammar).filter(g => g && g.pattern).map(g => ({ pattern: asStr(g.pattern), meaning: asStr(g.meaning), example: asStr(g.example) })).slice(0, 5),
+      grammar: arr(ex.grammar).filter(g => g && g.pattern).map(g => ({ pattern: asStr(g.pattern), reading: asStr(g.reading), meaning: asStr(g.meaning), example: asStr(g.example) })).slice(0, 5),
       compare: arr(ex.compare).filter(c => c && c.word).map(c => ({ word: asStr(c.word), reading: asStr(c.reading), meaning: asStr(c.meaning), note: asStr(c.note) })).slice(0, 5),
       pattern: asStr(ex.pattern), tip: asStr(ex.tip), choiceNotes: notes.slice(0, 4)
     }

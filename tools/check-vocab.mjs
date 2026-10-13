@@ -4,6 +4,7 @@
 //       분류 값, 그리고 문제은행 patternTags가 단어장에 빠짐없이 있는지(경고)
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { VKINDS } from "../src/vocab.js";
+import { readingErr } from "../src/furigana.js";
 
 const DIR = new URL("../data/vocab/", import.meta.url), BANK = new URL("../data/bank/", import.meta.url);
 const PREFIX = { grammar: "g-", kanji: "k-", words: "w-" };
@@ -48,7 +49,11 @@ for (const kind of Object.keys(VKINDS)){
       if (!/^〜?\S/.test(it.pattern || "")) err(`${at} pattern 없음`);
       if (!it.connection) err(`${at} connection(접속) 없음`);
       if (!Array.isArray(it.similar)) err(`${at} similar 배열 없음`);
-      else for (const s of it.similar) if (!s.pattern || !hangul(s.diff)) err(`${at} similar 항목 누락(${s.pattern || "?"})`);
+      else for (const s of it.similar){
+        if (!s.pattern || !hangul(s.diff)) err(`${at} similar 항목 누락(${s.pattern || "?"})`);
+        const e = readingErr(s); if (e) err(`${at} similar「${s.pattern}」 ${e}`);
+      }
+      { const e = readingErr(it); if (e) err(`${at} ${e}`); }
       keys.grammar.add(it.pattern);
     } else {
       if (!it.word) err(`${at} word 없음`);

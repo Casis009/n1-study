@@ -35,7 +35,7 @@ ${weak.length ? `[학습자 약점 ${isVocab ? "어휘" : "문법"}] 자연스�
   - choicesKo: choices와 같은 순서로 정확히 4개. {reading: 20자 이하 선택지에 한자가 있으면 전체 히라가나 읽기(문장 길이 선택지나 한자가 없으면 ""), ko: 선택지의 한국어 뜻}
   - why: 정답의 근거. 근거가 되는 본문 문장을 「」로 인용하고 설명(2~4문장).
   - kanji: 지문·문제·선택지에 나온 N1급 한자어 4~8개(선택지의 N1급 한자어도 포함). {word: 한자 표기, reading: 히라가나 읽기, meaning: 한국어 뜻}
-  - grammar: 핵심 문법·표현 1~4개. {pattern: "〜にすぎない" 형태, meaning: 한국어 뜻과 쓰임, example: 짧은 일본어 예문 + (한국어 해석)}
+  - grammar: 핵심 문법·표현 1~4개. {pattern: "〜にすぎない" 형태, reading: pattern 전체의 히라가나 읽기(例: 〜を禁じ得ない → 〜をきんじえない, 한자가 없으면 ""), meaning: 한국어 뜻과 쓰임, example: 짧은 일본어 예문 + (한국어 해석)}
   - pattern: 이 문제의 출제 패턴(질문 유형, 정답 근거가 보통 어디에 있는지) 1~2문장.
   - tip: 실전 풀이 요령 1~3문장.
   - choiceNotes: choices와 같은 순서로 정확히 4개. 각 선택지가 왜 정답이거나 오답인지 한 문장.
@@ -47,7 +47,7 @@ ${isVocab ? "  - 문자·어휘 유형에서 grammar는 관련 관용 표현·�
 - 지문이 있으면 최상위에 passageKo(지문 전체 한국어 번역, 단락 줄바꿈 유지)와 passageGloss(지문 속 N2~N1급 단어, 단락마다 3~8개, gloss와 같은 형식)를 넣는다. 지문이 없으면 ""와 [].
 
 [출력] 다른 말 없이 JSON 하나만:
-{"title":"일본어로 된 짧은 세트 제목","topic":"${topic}","passage":"지문(문법 유형은 빈 문자열)","passageKo":"","passageGloss":[{"w":"","r":"","m":""}],"questions":[{"stem":"문제 문장","choices":["","","",""],"answer":0,"patternTags":[""],"gloss":[{"w":"","r":"","m":""}],"ex":{"translation":{"full":"","ko":""},"why":"","choicesKo":[{"reading":"","ko":""},{"reading":"","ko":""},{"reading":"","ko":""},{"reading":"","ko":""}],"kanji":[{"word":"","reading":"","meaning":""}],"grammar":[{"pattern":"","meaning":"","example":""}],"pattern":"","tip":"","choiceNotes":["","","",""],"compare":[{"word":"","reading":"","meaning":"","note":""}]}}]}`;
+{"title":"일본어로 된 짧은 세트 제목","topic":"${topic}","passage":"지문(문법 유형은 빈 문자열)","passageKo":"","passageGloss":[{"w":"","r":"","m":""}],"questions":[{"stem":"문제 문장","choices":["","","",""],"answer":0,"patternTags":[""],"gloss":[{"w":"","r":"","m":""}],"ex":{"translation":{"full":"","ko":""},"why":"","choicesKo":[{"reading":"","ko":""},{"reading":"","ko":""},{"reading":"","ko":""},{"reading":"","ko":""}],"kanji":[{"word":"","reading":"","meaning":""}],"grammar":[{"pattern":"","reading":"","meaning":"","example":""}],"pattern":"","tip":"","choiceNotes":["","","",""],"compare":[{"word":"","reading":"","meaning":"","note":""}]}}]}`;
 }
 
 /* 면접 답변을 보고 예상 꼬리 질문 5개. 출력은 sets.js의 normalizeFollowups와 맞춘다. */
