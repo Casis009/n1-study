@@ -44,6 +44,18 @@ export function normalizeQ(q, oneBased){
   };
 }
 
+/* 본문 해설: sentences [{ja,ko,para,part?,claim?}] / passageNotes [{para,summary,flow,key}] / mainIdea (통합이해는 {A,B,common,diff}) */
+export function normalizeStudy(raw){
+  const sentences = arr(raw.sentences).filter(s => s && asStr(s.ja)).map(s => ({ ja: asStr(s.ja), ko: asStr(s.ko), para: Number(s.para) || 1,
+    ...(/^[AB]$/.test(s.part || "") ? { part: s.part } : {}), ...(s.claim === true ? { claim: true } : {}) }));
+  const passageNotes = arr(raw.passageNotes).filter(n => n && Number(n.para)).map(n => ({ para: Number(n.para), summary: asStr(n.summary), flow: asStr(n.flow), key: n.key === true }));
+  const m = raw.mainIdea;
+  const mainIdea = m && typeof m === "object" ? { A: asStr(m.A), B: asStr(m.B), common: asStr(m.common), diff: asStr(m.diff) } : asStr(m);
+  return { sentences, passageNotes, mainIdea };
+}
+/* 지문에 딸린 필드 묶음 (세트 → 단위·오답노트로 옮길 때) */
+export const passageFields = o => ({ passageKo: o.passageKo || "", passageGloss: o.passageGloss || [], sentences: o.sentences || [], passageNotes: o.passageNotes || [], mainIdea: o.mainIdea || "" });
+
 export function prepSet(raw, { shuffle = false, fallbackKind = "grammar_blank" } = {}){
   const list = arr(raw.questions);
   const oneBased = list.some(q => Number(q.answer) === 4) && !list.some(q => Number(q.answer) === 0);
@@ -65,7 +77,7 @@ export function prepSet(raw, { shuffle = false, fallbackKind = "grammar_blank" }
     sample: !!raw.sample, kind,
     title: asStr(raw.title) || KINDS[kind].label,
     topic: asStr(raw.topic), passage: asStr(raw.passage), engine: asStr(raw.engine),
-    passageKo: asStr(raw.passageKo), passageGloss: normalizeGloss(raw.passageGloss),
+    passageKo: asStr(raw.passageKo), passageGloss: normalizeGloss(raw.passageGloss), ...normalizeStudy(raw),
     questions, startedAt: Date.now(), elapsed: 0, done: false, logged: false
   };
 }

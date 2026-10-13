@@ -31,6 +31,37 @@ function checkGloss(list, texts, at, err){
     if (seen.has(g.w)) err(`${at} gloss「${g.w}」 중복`); else seen.add(g.w);
   }
 }
+/* 본문 해설(필수): sentences를 이으면 지문(줄바꿈·A/B 줄 제외)과 같아야 하고, 단락마다 passageNotes, mainIdea */
+function checkStudy(u, kind, p, at, err){
+  const S = u.sentences, N = u.passageNotes, M = u.mainIdea;
+  if (!Array.isArray(S) || !S.length){ err(`${at} sentences 없음`); return; }
+  const body = p.split(/\n/).map(l => l.trim()).filter(l => l && !/^[AB]$/.test(l)).join("");
+  if (S.map(s => s.ja).join("") !== body) err(`${at} sentences를 이은 것이 지문과 다름`);
+  let prev = 0;
+  S.forEach((s, i) => {
+    const t = `${at} 문장${i + 1}`;
+    if (!s.ja?.trim()) err(`${t} ja 없음`);
+    if (/[ぁ-んァ-ン一-龯]/.test(s.ja) ? !hangul(s.ko) : !s.ko?.trim()) err(`${t} ko(한국어) 없음`);   // 시간·숫자만 있는 줄은 그대로
+    if (!Number.isInteger(s.para) || s.para < prev || s.para > prev + 1) err(`${t} para 순서 오류(${s.para})`); else prev = s.para;
+    if (kind === "integrated" ? !/^[AB]$/.test(s.part || "") : s.part != null) err(`${t} part ${kind === "integrated" ? "없음(A/B)" : "는 통합이해만"}`);
+    if (s.claim != null && typeof s.claim !== "boolean") err(`${t} claim은 true/false`);
+  });
+  if (S[0]?.para !== 1) err(`${at} para는 1부터`);
+  if (!Array.isArray(N)) err(`${at} passageNotes 없음`);
+  else {
+    const paras = [...new Set(S.map(s => s.para))];
+    if (N.map(n => n.para).join() !== paras.join()) err(`${at} passageNotes 단락(${N.map(n => n.para)})이 문장 단락(${paras})과 다름`);
+    for (const n of N){
+      if (!hangul(n.summary)) err(`${at} 단락${n.para} summary(한국어) 없음`);
+      if (!n.flow?.trim()) err(`${at} 단락${n.para} flow 없음`);
+      if (typeof n.key !== "boolean") err(`${at} 단락${n.para} key는 true/false`);
+    }
+    if (kind !== "info_search" && !N.some(n => n.key)) err(`${at} 필자 주장 단락(key) 없음`);
+  }
+  if (kind === "integrated"){
+    if (!M || ["A", "B", "common", "diff"].some(x => !hangul(M[x]))) err(`${at} mainIdea {A,B,common,diff} 누락`);
+  } else if (!hangul(M)) err(`${at} mainIdea 없음`);
+}
 const index = { generated: new Date().toISOString().slice(0, 10), kinds: {} };
 
 for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "index.json").sort()){
@@ -65,6 +96,7 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
     if (p.trim()){
       if (!u.passageKo) miss("passageKo"); else if (!hangul(u.passageKo)) err(`${at} passageKo가 한국어가 아님`);
       if (!set.passageGloss.length) miss("passageGloss"); else checkGloss(set.passageGloss, [p], `${at} 지문`, err);
+      checkStudy(u, kind, p, at, err);
     }
     set.questions.forEach((q, i) => {
       qn++;

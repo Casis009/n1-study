@@ -75,7 +75,7 @@ export async function persistState(){
  * 백업: 기기 데이터를 JSON 하나로 내보내고, 불러올 때는 id 기준으로 합친다. API 키는 넣지 않는다.
  * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트),  v3: + progress·localBank(AI 문제·내 문제)·tagStats,  v4: + vocabDone.
  * 예전 version 파일도 그대로 불러올 수 있다.
- * notes·localBank 안의 문제에는 새 해설 필드(translation·choicesKo·gloss·passageKo·passageGloss)가 들어갈 수 있다.
+ * notes·localBank 안의 문제에는 새 해설 필드(translation·choicesKo·gloss·passageKo·passageGloss·sentences·passageNotes·mainIdea)가 들어갈 수 있다.
  * 행을 통째로 저장·복원하므로 필드 추가만으로는 version을 올리지 않는다(예전 파일은 이 필드 없이 그대로 보인다).
  */
 export const BACKUP_VERSION = 4;

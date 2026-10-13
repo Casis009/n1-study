@@ -258,3 +258,23 @@ nav.tabs button{flex:none;white-space:nowrap}
 .similar b{font-family:var(--mincho);font-size:14.5px}
 ruby rt{font:400 .52em/1 var(--sans);color:var(--muted);letter-spacing:0}
 .card-top .front ruby rt{font-size:.5em}
+/* 본문 해설 */
+.study-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.study-bar.locked .chip{opacity:.45;cursor:not-allowed}
+.passage .sent{border-radius:3px}
+.passage.tappable .sent{cursor:pointer;text-decoration:underline dotted var(--line);text-underline-offset:6px}
+.passage.tappable .sent[aria-expanded="true"]{background:var(--ai-soft)}
+.passage .sent.claim{background:var(--mark);box-shadow:0 2px 0 var(--mark-ink)}
+.passage .sent.speaking{background:var(--ok-soft);box-shadow:0 2px 0 var(--ok)}
+.passage.plain .sent{display:block}
+.sent-ko{display:flex;gap:6px;align-items:flex-start;text-indent:0;margin:.25em 0 .55em;padding:6px 10px;border-left:3px solid var(--ai);background:var(--paper);border-radius:0 6px 6px 0;font:400 14px/1.6 var(--sans);color:var(--ink)}
+.sent-ko > span{flex:1;min-width:0}
+.pnote{margin:.1em 0 1em;padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);font:400 13.5px/1.6 var(--sans);text-indent:0}
+.pnote.key{border-color:var(--mark-ink);background:var(--sheet)}
+.pnote p{margin:.2em 0 0;text-indent:0}
+.pnote .pn-top{display:flex;gap:8px;align-items:center}
+.pnote .flow{color:var(--muted);font-size:13px}
+.tag.key{border-color:var(--mark-ink);color:var(--mark-ink)}
+.main-idea{margin-top:8px;padding:10px 12px;border:1px solid var(--mark-ink);border-radius:6px;background:var(--sheet);font-size:14px}
+.main-idea p{margin:.3em 0 0}
+.passage-ko.full .label{margin-bottom:2px}

@@ -6,13 +6,13 @@
 import { h, $, prefs, fmtTime } from "./dom.js";
 import { KINDS, TOPICS, EXAM } from "./kinds.js";
 import { SAMPLES } from "./samples.js";
-import { prepSet, normalizeFollowups } from "./sets.js";
+import { prepSet, normalizeFollowups, normalizeStudy, passageFields } from "./sets.js";
 import { CATS, CAT } from "./interview.js";
 import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
-import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal } from "./bank.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage } from "./bank.js";
 import { hasKanji, rubyParts } from "./furigana.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
 
@@ -20,7 +20,7 @@ const GROUPS = ["문자·어휘", "문법", "독해"];
 const NUM = ["①", "②", "③", "④"];
 
 /* ---------- state ---------- */
-const settings = Object.assign({ key: "", model: DEFAULT_MODEL }, prefs.get("n1.settings", {}));
+const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false }, prefs.get("n1.settings", {}));
 const gen = Object.assign({ kind: "grammar_blank", count: 5, topic: "", weak: true }, prefs.get("n1.gen", {}));
 if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
 let current = null;
@@ -51,7 +51,7 @@ const fmtWhen = ts => {
 function cleanUnits(kind, raw){
   const set = prepSet(structuredClone({ ...raw, kind }), { fallbackKind: kind });
   const questions = set.questions.map(({ stem, choices, answer, patternTags, gloss, ex }) => ({ stem, choices, answer, patternTags, gloss, ex }));
-  return splitUnits(kind, { title: set.title, topic: set.topic, passage: set.passage, passageKo: set.passageKo, passageGloss: set.passageGloss, questions });
+  return splitUnits(kind, { title: set.title, topic: set.topic, passage: set.passage, ...passageFields(set), questions });
 }
 
 /* ---------- notes / cards / history ---------- */
@@ -59,7 +59,7 @@ async function addNote(set, q){
   if (q.saved) return;
   q.saved = true;
   const note = { id: set.id + "-" + set.questions.indexOf(q), at: Date.now(), kind: set.kind, title: set.title, passage: set.passage,
-    passageKo: set.passageKo || "", passageGloss: set.passageGloss || [],
+    ...passageFields(set),
     q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [], gloss: q.gloss || [] } };
   notes = [note, ...notes.filter(n => n.id !== note.id)];
   await db.put("notes", note); ensurePersist();
@@ -207,28 +207,97 @@ function stemNode(s, gl){
   }
   return wrap;
 }
+/* 밑줄(__)과 단어 탭을 살린 문장 조각 */
+function segNodes(text, gl){
+  return text.split(/(__[^_]+__)/).filter(Boolean).map(seg => /^__[^_]+__$/.test(seg) ? h("u", null, glossNodes(seg.slice(2, -2), gl)) : glossNodes(seg, gl));
+}
 function passageNode(text, kind, gl){
   const box = h("div", { class: "passage" + (kind === "info_search" ? " plain" : ""), lang: "ja" });
-  for (const para of text.split(/\n+/).map(t => t.trim()).filter(Boolean)){
-    const isAB = /^[AB]$/.test(para);
-    const p = h("p", { class: isAB ? "mark-ab" : null });
-    for (const seg of para.split(/(__[^_]+__)/)){
-      if (/^__[^_]+__$/.test(seg)) p.append(h("u", null, glossNodes(seg.slice(2, -2), gl)));
-      else if (seg) p.append(...glossNodes(seg, gl));
-    }
-    box.append(p);
-  }
+  for (const para of text.split(/
++/).map(t => t.trim()).filter(Boolean))
+    box.append(h("p", { class: /^[AB]$/.test(para) ? "mark-ab" : null }, segNodes(para, gl)));
   return box;
 }
-/* 지문 + (풀이가 끝났으면) 단어 탭과 접어 둔 지문 해석 */
-function passageBlock(o, kind, on, source){
-  const out = [passageNode(o.passage, kind, glossOf(o.passageGloss, on, source))];
-  if (on && o.passageKo?.trim()){
-    const d = h("details", { class: "passage-ko" }, h("summary", { text: "지문 해석 보기" }));
-    for (const para of o.passageKo.split(/\n+/).map(t => t.trim()).filter(Boolean)) d.append(h("p", { text: para }));
-    out.push(d);
-  }
-  return out;
+
+/* ---------- 본문 해설: [문장별 해석] [단락 요지·흐름] [전체 번역] ---------- */
+const studyView = new WeakMap();                 // 세트·오답노트 객체 → 켜 둔 보기와 펼친 문장
+const studyState = o => { let st = studyView.get(o); if (!st){ st = { sent: false, notes: false, full: false, open: new Set() }; studyView.set(o, st); } return st; };
+const passageBody = p => p.split("
+").map(l => l.trim()).filter(l => l && !/^[AB]$/.test(l)).join("");
+const hasStudy = o => o.sentences?.length > 0 && o.sentences.map(s => s.ja).join("") === passageBody(o.passage);
+const STUDY_BTNS = [["sent", "문장별 해석"], ["notes", "단락 요지·흐름"], ["full", "전체 번역"]];
+
+/* 지문 + 본문 해설. on = 세트를 다 풀었는지(단어 탭·해설 공개), always = 오답노트처럼 항상 공개 */
+function passageBlock(o, kind, on, source, { always = false } = {}){
+  const wrap = h("div", { class: "study" });
+  const open = always || on || settings.studyEarly;
+  const st = studyState(o);
+  const paint = () => {
+    const gl = glossOf(o.passageGloss, on || always, source);
+    wrap.replaceChildren();
+    if (!hasStudy(o)){                             // 예전 데이터·AI 문제: 지문 + 접어 둔 전체 번역
+      wrap.append(passageNode(o.passage, kind, gl));
+      if (open && o.passageKo?.trim()){
+        const d = h("details", { class: "passage-ko" }, h("summary", { text: "지문 해석 보기" }));
+        for (const para of o.passageKo.split(/
++/).map(t => t.trim()).filter(Boolean)) d.append(h("p", { text: para }));
+        wrap.append(d);
+      }
+      return;
+    }
+    const mode = k => open && st[k];
+    wrap.append(studyPassage(o, kind, gl, { sent: mode("sent"), notes: mode("notes"), open: st.open }, i => { st.open.has(i) ? st.open.delete(i) : st.open.add(i); paint(); }));
+    const bar = h("div", { class: "study-bar" + (open ? "" : " locked") },
+      STUDY_BTNS.map(([k, label]) => h("button", { class: "chip", type: "button", disabled: !open, "aria-pressed": String(mode(k)),
+        onclick: () => { st[k] = !st[k]; paint(); } }, label)),
+      open ? null : h("span", { class: "hint", text: "문제를 다 풀면 볼 수 있어요" }));
+    wrap.append(bar);
+    if (mode("notes")) wrap.append(mainIdeaNode(o.mainIdea, kind));
+    if (mode("full") && o.passageKo?.trim()) wrap.append(h("div", { class: "passage-ko full" },
+      h("div", { class: "label", text: "전체 번역" }), o.passageKo.split(/
++/).map(t => t.trim()).filter(Boolean).map(t => h("p", { text: t }))));
+  };
+  paint();
+  return [wrap];
+}
+/* 문장 단위 지문: 문장별 해석이 켜지면 문장을 탭해 바로 아래에 해석, 단락 요지가 켜지면 단락마다 요지·흐름과 주장 문장 강조 */
+function studyPassage(o, kind, gl, v, onTap){
+  const box = h("div", { class: "passage" + (kind === "info_search" ? " plain" : "") + (v.sent ? " tappable" : ""), lang: "ja" });
+  const notes = new Map((o.passageNotes || []).map(n => [n.para, n]));
+  let part = null, para = 0, p = null;
+  const flush = () => { const n = notes.get(para); if (v.notes && n) box.append(paraNote(n, kind)); };
+  o.sentences.forEach((s, i) => {
+    if (s.para !== para){ if (p) flush(); para = s.para; p = null; }
+    if (s.part && s.part !== part){ part = s.part; box.append(h("p", { class: "mark-ab", text: part })); }
+    if (!p){ p = h("p"); box.append(p); }
+    const span = h("span", { class: "sent" + (v.notes && s.claim ? " claim" : ""), "data-i": String(i) }, segNodes(s.ja, gl));
+    if (v.sent){
+      const on = v.open.has(i);
+      Object.assign(span, { tabIndex: 0 });
+      span.setAttribute("role", "button");
+      span.setAttribute("aria-expanded", String(on));
+      span.addEventListener("click", () => onTap(i));
+      span.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); onTap(i); } });
+      p.append(span);
+      if (on) p.append(h("span", { class: "sent-ko", lang: "ko" }, h("span", { text: s.ko })));
+    } else p.append(span);
+  });
+  if (p) flush();
+  return box;
+}
+function paraNote(n, kind){
+  return h("div", { class: "pnote" + (n.key ? " key" : ""), lang: "ko" },
+    h("div", { class: "pn-top" }, h("b", { text: kind === "integrated" ? (n.para === 1 ? "A 요지" : "B 요지") : `${n.para}단락 요지` }),
+      n.key ? h("span", { class: "tag key", text: kind === "info_search" ? "체크 포인트" : "필자 주장" }) : null),
+    h("p", { text: n.summary }),
+    n.flow ? h("p", { class: "flow" }, h("span", { class: "hint", text: "흐름 " }), h("span", { text: n.flow })) : null);
+}
+function mainIdeaNode(m, kind){
+  const box = h("div", { class: "main-idea", lang: "ko" }, h("div", { class: "label", text: kind === "info_search" ? "안내문 요지" : kind === "integrated" ? "A·B의 주장" : "필자의 주장" }));
+  if (m && typeof m === "object") box.append(...[["A", m.A], ["B", m.B], ["공통점", m.common], ["차이점", m.diff]].filter(([, t]) => t)
+    .map(([k, t]) => h("p", null, h("b", { text: k + " " }), h("span", { text: t }))));
+  else if (m) box.append(h("p", { text: m }));
+  return box;
 }
 function starBtn(type, item, source){
   const front = type === "grammar" ? item.pattern : item.word;
@@ -449,7 +518,7 @@ function renderNote(){
       h("div", { class: "meta" }, h("span", { class: "tag", lang: "ja", text: KINDS[n.kind]?.jp || "" }), h("span", { text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { lang: "ja", text: n.title })),
       h("div", { class: "stemline", lang: "ja", text: n.q.stem.replace(/__/g, "") })));
     const body = h("div", { class: "note-body" });
-    if (n.passage && n.passage.trim()) body.append(...passageBlock(n, n.kind, true, n.title));
+    if (n.passage && n.passage.trim()) body.append(...passageBlock(n, n.kind, true, n.title, { always: true }));
     const r = noteRetry.get(n.id) || { stem: n.q.stem, choices: n.q.choices, answer: n.q.answer, ex: n.q.ex, gloss: n.q.gloss || [], sel: n.q.mySel, checked: true };
     body.append(questionNode(r, 0, { label: "復習", source: n.title, onChange: () => { noteRetry.set(n.id, r); renderNote(); },
       extraActions: [
@@ -889,6 +958,13 @@ let showKey = false;
 async function renderSettings(){
   const v = $("view-set"); v.replaceChildren();
 
+  /* 보기 설정 */
+  const early = h("input", { id: "study-early", type: "checkbox", onchange: e => { settings.studyEarly = e.target.checked; savePrefs(); renderSolve(); } });
+  early.checked = !!settings.studyEarly;
+  v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "보기 설정" }),
+    h("label", { class: "check", for: "study-early" }, early, "풀기 전에도 본문 해설 보기"),
+    h("p", { class: "hint", text: "독해·文章の文法 지문 아래의 문장별 해석·단락 요지·전체 번역은 보통 세트를 다 푼 뒤에 열려요. 켜면 풀기 전에도 볼 수 있어요. (단어 탭은 그대로 다 푼 뒤에만)" })));
+
   /* 학습 기록 */
   const rec = h("section", { class: "panel stack" }, h("div", { class: "label", text: "학습 기록" }));
   if (!history.length) rec.append(h("p", { class: "hint", text: "세트를 끝까지 풀면 여기에 점수와 시간이 쌓여요. (예시 세트는 기록하지 않아요)" }));
@@ -1095,6 +1171,20 @@ async function loadAll(){
   await loadBankState();
   await loadVocabState();
 }
+/* 본문 해설이 생기기 전에 저장된 풀던 세트·오답노트: 기본 은행의 같은 지문에서 해석·해설을 채운다 */
+async function backfillStudy(o){
+  if (!o?.passage?.trim() || hasStudy(o)) return false;
+  const u = await findUnitByPassage(o.kind, o.passage);
+  if (!u) return false;
+  Object.assign(o, { passageKo: o.passageKo || u.passageKo || "", passageGloss: o.passageGloss?.length ? o.passageGloss : (u.passageGloss || []), ...normalizeStudy(u) });
+  return true;
+}
+async function backfillAll(){
+  let changed = false;
+  if (current && await backfillStudy(current)){ saveCurrent(); changed = true; }
+  for (const n of notes) if (await backfillStudy(n)){ await db.put("notes", n).catch(() => {}); changed = true; }
+  if (changed){ renderSolve(); renderNote(); }
+}
 async function boot(){
   for (const t of TABS) $("tab-" + t).addEventListener("click", () => showTab(t));
   const today = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }) + "T00:00:00+09:00");
@@ -1118,6 +1208,7 @@ async function boot(){
   }
   if (!current) current = prepSet(structuredClone(SAMPLES.grammar));
   renderAll();
+  backfillAll();
   let start = "solve"; try { start = sessionStorage.getItem("n1.tab") || "solve"; } catch {}
   showTab(TABS.includes(start) ? start : "solve");
 

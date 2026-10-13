@@ -5,7 +5,7 @@
  */
 import { KINDS } from "./kinds.js";
 import { db } from "./db.js";
-import { prepSet } from "./sets.js";
+import { prepSet, passageFields } from "./sets.js";
 
 export const REVIEW_DAYS = [1, 3, 7, 14];
 const DAY = 86400000;
@@ -57,6 +57,11 @@ async function loadUnits(kind){
   }
   return [...files.get(kind), ...state.local.filter(r => r.kind === kind).map(r => ({ ...r.unit, id: r.id, source: r.source }))];
 }
+/* 지문이 같은 기본 은행 단위 (본문 해설이 없던 예전 세트·오답노트 보완용) */
+export async function findUnitByPassage(kind, passage){
+  if (!passage?.trim() || !index.kinds[kind]) return null;
+  try { return (await loadUnits(kind)).find(u => u.passage === passage) || null; } catch { return null; }
+}
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 /* 출제: 안 푼 것(무작위) → 복습 시각이 지난 것(오래된 순). force면 가장 오래전에 푼 것부터. */
@@ -80,7 +85,7 @@ export function buildSet(kind, units){
     raw = { kind, title: `${k.label} ${qs.length}문항`, topic: "", passage: "", questions: qs };
   } else {
     const u = units[0];
-    raw = { kind, title: u.title, topic: u.topic, passage: u.passage, passageKo: u.passageKo, passageGloss: u.passageGloss, questions: u.questions.map(q => ({ ...q, unitId: u.id })) };
+    raw = { kind, title: u.title, topic: u.topic, passage: u.passage, ...passageFields(u), questions: u.questions.map(q => ({ ...q, unitId: u.id })) };
   }
   const set = prepSet(structuredClone(raw), { shuffle: true, fallbackKind: kind });
   set.bank = true; set.recorded = {}; set.snap = {};
@@ -170,8 +175,8 @@ export function tagList({ group = null } = {}){
 /* 기기 은행: AI 문제·내 문제 추가 */
 const newId = p => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 export function splitUnits(kind, raw){
-  const base = { title: raw.title || "", topic: raw.topic || "", passage: raw.passage || "", passageKo: raw.passageKo || "", passageGloss: raw.passageGloss || [] };
-  return isUnitKind(kind) ? (raw.questions || []).map(q => ({ ...base, passage: "", passageKo: "", passageGloss: [], questions: [q] })) : [{ ...base, questions: raw.questions || [] }];
+  const base = { title: raw.title || "", topic: raw.topic || "", passage: raw.passage || "", ...passageFields(raw) };
+  return isUnitKind(kind) ? (raw.questions || []).map(q => ({ ...base, passage: "", ...passageFields({}), questions: [q] })) : [{ ...base, questions: raw.questions || [] }];
 }
 export async function addLocalUnits(kind, units, source){
   const rows = units.map(u => ({ id: newId(source), kind, source, at: Date.now(), unit: u }));
