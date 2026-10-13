@@ -278,3 +278,15 @@ ruby rt{font:400 .52em/1 var(--sans);color:var(--muted);letter-spacing:0}
 .main-idea{margin-top:8px;padding:10px 12px;border:1px solid var(--mark-ink);border-radius:6px;background:var(--sheet);font-size:14px}
 .main-idea p{margin:.3em 0 0}
 .passage-ko.full .label{margin-bottom:2px}
+/* 읽어주기 */
+.spk{border:0;background:none;font-size:15px;line-height:1;padding:6px;min-width:32px;min-height:32px;border-radius:6px;vertical-align:middle;flex:none}
+.spk:hover{background:var(--ai-soft)}
+.spk[aria-pressed="true"]{background:var(--ai-soft);box-shadow:inset 0 0 0 1px var(--ai)}
+.spk.off,.spk-all.off{opacity:.4}
+.tr-jp{display:flex;gap:6px;align-items:flex-start}
+.tr-jp > span{flex:1;min-width:0}
+.tts-help{position:fixed;z-index:60;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));width:min(420px,calc(100vw - 32px));background:var(--sheet);color:var(--ink);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 28px rgb(0 0 0 / .22);padding:12px 14px;font-size:13.5px}
+.tts-help .gp-top{display:flex;align-items:center;gap:8px}
+.tts-help .gp-x{margin-left:auto;border:0;background:none;color:var(--muted);font-size:20px;line-height:1;padding:4px 8px}
+.tts-help p{margin:.45em 0 0}
+.tts-set select{max-width:100%}

@@ -14,13 +14,15 @@ import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage } from "./bank.js";
 import { hasKanji, rubyParts } from "./furigana.js";
+import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES } from "./tts.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
 
 const GROUPS = ["문자·어휘", "문법", "독해"];
 const NUM = ["①", "②", "③", "④"];
 
 /* ---------- state ---------- */
-const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false }, prefs.get("n1.settings", {}));
+const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "" }, prefs.get("n1.settings", {}));
+setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice });
 const gen = Object.assign({ kind: "grammar_blank", count: 5, topic: "", weak: true }, prefs.get("n1.gen", {}));
 if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
 let current = null;
@@ -148,6 +150,34 @@ function glossNodes(text, gl){
   if (buf) out.push(buf);
   return out;
 }
+/* ---------- 읽어주기 🔊 ---------- */
+/* text: 읽을 일본어(단어·문법은 reading을 넘겨 오독 방지). 누르면 읽고, 읽는 중에 다시 누르면 멈춤 */
+function speakBtn(text, label){
+  const b = h("button", { class: "spk" + (ttsReady() ? "" : " off"), type: "button", "aria-label": `${label || "일본어"} 듣기`, title: "읽어주기", "aria-pressed": "false", text: "🔊" });
+  b.addEventListener("click", e => {
+    e.stopPropagation();
+    if (!ttsReady()){ openTtsHelp(); return; }
+    if (b.getAttribute("aria-pressed") === "true"){ stopSpeak(); return; }
+    b.setAttribute("aria-pressed", "true");
+    speak(text, { onEnd: () => b.setAttribute("aria-pressed", "false") });
+  });
+  return b;
+}
+onVoices(() => { if (ttsReady()) document.querySelectorAll(".spk.off").forEach(b => b.classList.remove("off")); });
+let ttsHelp = null;
+function openTtsHelp(){
+  ttsHelp?.remove();
+  const close = () => { ttsHelp?.remove(); ttsHelp = null; };
+  ttsHelp = h("div", { class: "tts-help", role: "dialog", "aria-label": "일본어 음성 설치 방법" },
+    h("div", { class: "gp-top" }, h("b", { text: "일본어 음성이 없어요" }), h("button", { class: "gp-x", type: "button", "aria-label": "닫기", onclick: close }, "×")),
+    h("p", { text: "이 기기에서 일본어 읽기 음성을 찾지 못했어요. 설치한 뒤 브라우저를 다시 열어 주세요." }),
+    h("p", null, h("b", { text: "안드로이드 " }), "설정 → 시스템(일반) → 언어 및 입력 → 텍스트 음성 변환(TTS) → Google 음성 엔진 설정 → 음성 데이터 설치 → 일본어"),
+    h("p", null, h("b", { text: "아이폰 " }), "설정 → 손쉬운 사용 → 읽기 및 말하기 → 음성 → 일본어 → 음성(예: Kyoko) 다운로드"),
+    h("p", null, h("b", { text: "PC(Windows) " }), "설정 → 시간 및 언어 → 음성 → 음성 추가 → 일본어"));
+  document.body.append(ttsHelp);
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape"){ ttsHelp?.remove(); ttsHelp = null; } });
+
 /* 문법 표제어 후리가나: 한자 덩어리 위에만 <ruby>. 정렬이 안 되면 뒤에 （읽기）. hide면 읽기를 감춘다(뜻 가리기) */
 function rubyNode(text, reading, { cls = null, hide = false } = {}){
   const el = h("b", { class: cls, lang: "ja" });
@@ -178,7 +208,7 @@ function openGloss(target, g, source){
   paint();
   const acts = h("div", { class: "gp-act" }, star);
   const pop = h("div", { class: "gloss-pop", role: "dialog", "aria-label": g.w },
-    h("div", { class: "gp-top" }, h("b", { lang: "ja", text: g.w }), g.r && g.r !== g.w ? h("span", { class: "r", lang: "ja", text: g.r }) : null,
+    h("div", { class: "gp-top" }, h("b", { lang: "ja", text: g.w }), g.r && g.r !== g.w ? h("span", { class: "r", lang: "ja", text: g.r }) : null, speakBtn(g.r || g.w, g.w),
       h("button", { class: "gp-x", type: "button", "aria-label": "닫기", onclick: closeGloss }, "×")),
     h("div", { class: "m", text: g.m }), acts);
   document.body.append(pop);
@@ -221,7 +251,7 @@ function passageNode(text, kind, gl){
 
 /* ---------- 본문 해설: [문장별 해석] [단락 요지·흐름] [전체 번역] ---------- */
 const studyView = new WeakMap();                 // 세트·오답노트 객체 → 켜 둔 보기와 펼친 문장
-const studyState = o => { let st = studyView.get(o); if (!st){ st = { sent: false, notes: false, full: false, open: new Set() }; studyView.set(o, st); } return st; };
+const studyState = o => { let st = studyView.get(o); if (!st){ st = { sent: false, notes: false, full: false, open: new Set(), speaking: null, playing: false }; studyView.set(o, st); } return st; };
 const passageBody = p => p.split("
 ").map(l => l.trim()).filter(l => l && !/^[AB]$/.test(l)).join("");
 const hasStudy = o => o.sentences?.length > 0 && o.sentences.map(s => s.ja).join("") === passageBody(o.passage);
@@ -236,7 +266,7 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
     const gl = glossOf(o.passageGloss, on || always, source);
     wrap.replaceChildren();
     if (!hasStudy(o)){                             // 예전 데이터·AI 문제: 지문 + 접어 둔 전체 번역
-      wrap.append(passageNode(o.passage, kind, gl));
+      wrap.append(passageNode(o.passage, kind, gl), h("div", { class: "study-bar" }, readAllBtn(o, st, wrap)));
       if (open && o.passageKo?.trim()){
         const d = h("details", { class: "passage-ko" }, h("summary", { text: "지문 해석 보기" }));
         for (const para of o.passageKo.split(/
@@ -246,8 +276,8 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
       return;
     }
     const mode = k => open && st[k];
-    wrap.append(studyPassage(o, kind, gl, { sent: mode("sent"), notes: mode("notes"), open: st.open }, i => { st.open.has(i) ? st.open.delete(i) : st.open.add(i); paint(); }));
-    const bar = h("div", { class: "study-bar" + (open ? "" : " locked") },
+    wrap.append(studyPassage(o, kind, gl, { sent: mode("sent"), notes: mode("notes"), open: st.open, speaking: st.speaking }, i => { st.open.has(i) ? st.open.delete(i) : st.open.add(i); paint(); }));
+    const bar = h("div", { class: "study-bar" + (open ? "" : " locked") }, readAllBtn(o, st, wrap),
       STUDY_BTNS.map(([k, label]) => h("button", { class: "chip", type: "button", disabled: !open, "aria-pressed": String(mode(k)),
         onclick: () => { st[k] = !st[k]; paint(); } }, label)),
       open ? null : h("span", { class: "hint", text: "문제를 다 풀면 볼 수 있어요" }));
@@ -260,6 +290,29 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
   paint();
   return [wrap];
 }
+/* 지문 전체 읽기(재생/정지). 문장 데이터가 있으면 읽는 문장을 강조 */
+function readAllBtn(o, st, wrap){
+  st.wrap = wrap;                                  // 다시 그려져도 최신 화면을 갱신하도록
+  const sync = () => {
+    st.wrap.querySelectorAll(".sent[data-i]").forEach(el => el.classList.toggle("speaking", el.dataset.i === String(st.speaking)));
+    const b = st.wrap.querySelector(".spk-all");
+    if (b){ b.textContent = st.playing ? "■ 정지" : "🔊 지문 읽기"; b.setAttribute("aria-pressed", String(st.playing)); }
+  };
+  const btn = h("button", { class: "chip spk-all" + (ttsReady() ? "" : " off"), type: "button", "aria-pressed": String(st.playing) }, st.playing ? "■ 정지" : "🔊 지문 읽기");
+  btn.addEventListener("click", () => {
+    if (!ttsReady()){ openTtsHelp(); return; }
+    if (st.playing){ stopSpeak(); return; }
+    const study = hasStudy(o);
+    const texts = study ? o.sentences.map(s => s.ja) : o.passage.split(/
++/).map(t => t.trim()).filter(t => t && !/^[AB]$/.test(t));
+    speak(texts, {
+      onEach: i => { st.speaking = study ? i : null; sync(); },
+      onEnd: () => { st.playing = false; st.speaking = null; sync(); }
+    });
+    st.playing = true; sync();
+  });
+  return btn;
+}
 /* 문장 단위 지문: 문장별 해석이 켜지면 문장을 탭해 바로 아래에 해석, 단락 요지가 켜지면 단락마다 요지·흐름과 주장 문장 강조 */
 function studyPassage(o, kind, gl, v, onTap){
   const box = h("div", { class: "passage" + (kind === "info_search" ? " plain" : "") + (v.sent ? " tappable" : ""), lang: "ja" });
@@ -270,7 +323,7 @@ function studyPassage(o, kind, gl, v, onTap){
     if (s.para !== para){ if (p) flush(); para = s.para; p = null; }
     if (s.part && s.part !== part){ part = s.part; box.append(h("p", { class: "mark-ab", text: part })); }
     if (!p){ p = h("p"); box.append(p); }
-    const span = h("span", { class: "sent" + (v.notes && s.claim ? " claim" : ""), "data-i": String(i) }, segNodes(s.ja, gl));
+    const span = h("span", { class: "sent" + (v.notes && s.claim ? " claim" : "") + (v.speaking === i ? " speaking" : ""), "data-i": String(i) }, segNodes(s.ja, gl));
     if (v.sent){
       const on = v.open.has(i);
       Object.assign(span, { tabIndex: 0 });
@@ -279,7 +332,7 @@ function studyPassage(o, kind, gl, v, onTap){
       span.addEventListener("click", () => onTap(i));
       span.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); onTap(i); } });
       p.append(span);
-      if (on) p.append(h("span", { class: "sent-ko", lang: "ko" }, h("span", { text: s.ko })));
+      if (on) p.append(h("span", { class: "sent-ko", lang: "ko" }, h("span", { text: s.ko }), speakBtn(s.ja, `${i + 1}번째 문장`)));
     } else p.append(span);
   });
   if (p) flush();
@@ -318,7 +371,7 @@ function explanationNode(q, source){
   if (q.patternTags?.length) box.append(h("div", { class: "ptags" }, h("span", { class: "hint", text: "패턴" }), q.patternTags.map(t => h("span", { class: "tag", lang: "ja", text: t }))));
   const tr = ex.translation || {};
   if (tr.full || tr.ko) box.append(h("section", null, h("h4", { text: "문제 해석" }),
-    tr.full ? h("p", { class: "tr-jp", lang: "ja", text: tr.full }) : null, tr.ko ? h("p", { text: tr.ko }) : null));
+    tr.full ? h("p", { class: "tr-jp", lang: "ja" }, h("span", { text: tr.full }), speakBtn(tr.full.replace(/★/g, ""), "완성 문장")) : null, tr.ko ? h("p", { text: tr.ko }) : null));
   if (ex.why) box.append(h("section", null, h("h4", { text: "정답 근거" }), h("p", { text: ex.why })));
   if (ex.choicesKo?.some(c => c.ko)) box.append(h("section", null, h("h4", { text: "선택지 해석" }),
     h("ul", { class: "notes cko" }, ex.choicesKo.map((c, i) => h("li", { class: i === q.answer ? "isans" : null }, h("span", { class: "n", text: NUM[i] }),
@@ -328,6 +381,7 @@ function explanationNode(q, source){
       h("span", { class: "w", lang: "ja", text: k.word }),
       h("span", { class: "r", lang: "ja", text: k.reading ? `（${k.reading}）` : "" }),
       h("span", { class: "m", text: k.meaning }),
+      speakBtn(k.reading || k.word, k.word),
       starBtn("kanji", k, source))))));
   if (ex.grammar.length) box.append(h("section", null, h("h4", { text: "주요 문법" }),
     h("div", { class: "gram" }, ex.grammar.map(g => h("div", { class: "gr" },
@@ -629,6 +683,7 @@ function vocabCard(kind, it, wrongN){
   card.append(h("div", { class: "card-top" },
     kind === "grammar" ? rubyNode(head, it.reading, { cls: "front", hide: hidden }) : h("b", { class: "front", lang: "ja", text: head }),
     showReading && it.reading ? h("span", { class: "r", lang: "ja", text: `（${it.reading}）` }) : null,
+    hidden ? null : speakBtn(kind === "grammar" ? (it.reading || it.pattern) : (it.reading || it.word), head),
     kind === "words" && it.pos ? h("span", { class: "tag", text: it.pos }) : null,
     wrongN ? h("span", { class: "tag wrong", text: `자주 틀림 ×${wrongN}` }) : null,
     doneBtn));
@@ -640,7 +695,7 @@ function vocabCard(kind, it, wrongN){
     if (it.usage) body.append(h("div", { class: "src" }, h("b", { text: "연어 " }), h("span", { lang: "ja", text: it.usage })));
     if (it.synonyms?.length) body.append(h("div", { class: "src" }, h("b", { text: "유의어 " }), h("span", { lang: "ja", text: it.synonyms.join("・") })));
   }
-  body.append(h("div", { class: "extra", lang: "ja" }, glossNodes(it.example, glossOf(it.gloss, true, "기본 단어장"))), h("div", { class: "src", text: it.exampleKo }));
+  body.append(h("div", { class: "extra", lang: "ja" }, glossNodes(it.example, glossOf(it.gloss, true, "기본 단어장")), speakBtn(it.example, "예문")), h("div", { class: "src", text: it.exampleKo }));
   if (kind === "grammar" && it.similar?.length) body.append(h("div", { class: "similar" }, it.similar.map(s =>
     h("div", null, rubyNode(s.pattern, s.reading), h("span", { text: " — " + s.diff })))));
   if (kind === "grammar"){
@@ -963,7 +1018,8 @@ async function renderSettings(){
   early.checked = !!settings.studyEarly;
   v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "보기 설정" }),
     h("label", { class: "check", for: "study-early" }, early, "풀기 전에도 본문 해설 보기"),
-    h("p", { class: "hint", text: "독해·文章の文法 지문 아래의 문장별 해석·단락 요지·전체 번역은 보통 세트를 다 푼 뒤에 열려요. 켜면 풀기 전에도 볼 수 있어요. (단어 탭은 그대로 다 푼 뒤에만)" })));
+    h("p", { class: "hint", text: "독해·文章の文法 지문 아래의 문장별 해석·단락 요지·전체 번역은 보통 세트를 다 푼 뒤에 열려요. 켜면 풀기 전에도 볼 수 있어요. (단어 탭은 그대로 다 푼 뒤에만)" }),
+    ttsSettings()));
 
   /* 학습 기록 */
   const rec = h("section", { class: "panel stack" }, h("div", { class: "label", text: "학습 기록" }));
@@ -1020,6 +1076,24 @@ async function renderSettings(){
     `회 · 무료 한도는 미국 태평양 시간 자정(한국 ${resetTimeKST()})에 초기화돼요. 문제 세트 1개 = 호출 1회.`));
   v.append(p);
 }
+/* 읽어주기 설정: 속도·음성(기기에 있는 일본어 음성) */
+function ttsSettings(){
+  const box = h("div", { class: "stack tts-set" }, h("div", { class: "label", text: "읽어주기 🔊" }));
+  const save = () => { setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice }); savePrefs(); };
+  box.append(h("div", { class: "chips" }, h("span", { class: "hint", text: "속도" }), RATES.map(r => h("button", { class: "chip", type: "button", "aria-pressed": String(settings.ttsRate === r),
+    onclick: () => { settings.ttsRate = r; save(); renderSettings(); } }, r === 1 ? "1.0 보통" : r === 0.85 ? "0.85 조금 느리게" : "0.7 느리게"))));
+  const vs = jaVoices();
+  if (!vs.length) box.append(h("p", { class: "hint" }, "이 기기에서 일본어 음성을 찾지 못했어요. ", h("button", { class: "btn small ghost", type: "button", onclick: openTtsHelp }, "설치 방법 보기")));
+  else {
+    const sel = h("select", { id: "tts-voice", onchange: e => { settings.ttsVoice = e.target.value; save(); } },
+      h("option", { value: "", text: "기본 일본어 음성" }), vs.map(v => h("option", { value: v.voiceURI, text: `${v.name}${v.localService ? "" : " (온라인)"}` })));
+    sel.value = vs.some(v => v.voiceURI === settings.ttsVoice) ? settings.ttsVoice : "";
+    box.append(h("label", { class: "field", for: "tts-voice" }, h("span", { class: "label", text: "음성" }), sel));
+  }
+  box.append(h("div", { class: "row" }, speakBtn("日本語能力試験に向けて、毎日少しずつ勉強を続けましょう。", "예시 문장"), h("span", { class: "hint", text: "예시 문장 들어 보기 · 단어·한자·문법은 읽기(히라가나)로, 문장은 원문 그대로 읽어요." })));
+  return box;
+}
+onVoices(() => { if (!$("view-set").hidden) renderSettings(); });
 /* 패턴별 통계: 문항의 patternTags 기준 출제 횟수 · 틀린 횟수(찍어서 맞힘 포함) */
 let tagGroup = "전체", tagAll = false;
 function tagStatsPanel(){
