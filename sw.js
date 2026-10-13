@@ -4,7 +4,7 @@
  * 문제은행·기본 단어장(data/bank, data/vocab의 index.json에 적힌 파일)도 설치 때 캐시해서 오프라인에서 풀 수 있게 한다.
  * 앱 파일이나 문제은행을 고치면 VERSION을 올려야 사용자 기기에 새 버전이 반영된다.
  */
-const VERSION = "n1-study-v55";
+const VERSION = "n1-study-v56";
 const SHELL = [
   "./", "./index.html", "./manifest.webmanifest",
   "./src/styles.css", "./src/main.js", "./src/dom.js", "./src/db.js", "./src/sets.js",
