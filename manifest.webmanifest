@@ -1,7 +1,8 @@
 {
+  "id": "/n1-study/",
   "name": "N1 연습장",
   "short_name": "N1 연습장",
-  "description": "JLPT N1 1교시 문제를 AI로 만들어 풀고, 오답노트와 단어장을 기기에 저장하는 연습장",
+  "description": "JLPT N1 1교시 문제은행을 풀고, 오답노트·단어장·복습 일정을 기기에 저장하는 연습장",
   "lang": "ko",
   "start_url": "./",
   "scope": "./",
@@ -9,8 +10,8 @@
   "background_color": "#f3f5f8",
   "theme_color": "#2d4a8c",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
