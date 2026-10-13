@@ -231,3 +231,12 @@ nav.tabs button{flex:none;white-space:nowrap}
 .mine-list{list-style:none;margin:0;padding:0;display:grid}
 .mine-list li{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
 .mine-list .stemline{font-family:var(--mincho);font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+
+/* ---- 기본 단어장 ---- */
+.card.vocab.done{opacity:.8}
+.card.vocab .card-top .btn{margin-left:auto}
+.tag.wrong{border-color:var(--ng);color:var(--ng);background:var(--ng-soft)}
+.x-read{font-family:var(--mincho);margin-right:8px;color:var(--ng)}
+.card-body .src b{font-weight:600;color:var(--ai);font-size:12px;margin-right:2px}
+.similar{display:grid;gap:4px;font-size:13.5px;border-top:1px solid var(--line);padding-top:6px}
+.similar b{font-family:var(--mincho);font-size:14.5px}

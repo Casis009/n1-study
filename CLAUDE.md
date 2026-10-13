@@ -23,7 +23,8 @@ index.html             화면 뼈대, 탭 5개(문제 / 오답노트 / 단어장
 manifest.webmanifest   PWA(홈 화면 설치)
 sw.js                  오프라인 캐시(문제은행 포함). 앱 파일·문제은행을 고치면 VERSION을 올릴 것
 src/main.js            상태와 렌더링 전부 (탭별 render* 함수)
-src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)
+src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제
+src/vocab.js           기본 단어장 로드·외웠어요(vocabDone)·틀리면 외웠어요 해제
 src/kinds.js           N1 1교시 12개 문제 유형 정의, 주제 목록, 시험일
 src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱
@@ -36,14 +37,16 @@ src/dom.js             h() DOM 도우미, prefs(localStorage), 시간 포맷
 src/styles.css         디자인 토큰(:root) + 라이트/다크 테마
 data/bank/             문제은행 <유형키>.json + index.json(도구가 생성). 문장은 직접 작성
 tools/check-bank.mjs   문제은행 검증 + index.json 생성: node --no-warnings tools/check-bank.mjs
+data/vocab/            기본 단어장 grammar/kanji/words.json + index.json(도구가 생성). 뜻풀이·예문은 직접 작성
+tools/check-vocab.mjs  단어장 검증 + index.json 생성 + 문제은행 patternTags 누락 경고
 docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은행 계획·진행 현황·빈출 항목)
 ```
 
 ## 데이터
 
-- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2), `progress`(문제은행 단위별 풀이·복습 일정, v3), `localBank`(기기에만 있는 AI 문제·내 문제, v3), `tagStats`(패턴별 출제·틀림, v3). 스키마는 `src/db.js` 상단 주석.
-- **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수), `n1.interview`(답변 노트 필터·쓰던 답변), `n1.mine`(내 문제 입력 중인 내용).
-- 백업 JSON(`app: "n1-study"`, `version: 3`)에는 notes/cards/history/answers/progress/localBank/tagStats만 들어가고 **API 키는 절대 넣지 않는다.** v1(answers 없음) 파일도 불러올 수 있고, 앱보다 새 version은 거부한다. 스토어를 백업에 추가하면 `BACKUP_VERSION`(db.js)을 올릴 것.
+- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2), `progress`(문제은행 단위별 풀이·복습 일정, v3), `localBank`(기기에만 있는 AI 문제·내 문제, v3), `tagStats`(패턴별 출제·틀림, v3), `vocabDone`(기본 단어장 외웠어요, v4). 스키마는 `src/db.js` 상단 주석.
+- **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수), `n1.interview`(답변 노트 필터·쓰던 답변), `n1.mine`(내 문제 입력 중인 내용), `n1.vocab`(단어장 보기 설정).
+- 백업 JSON(`app: "n1-study"`, `version: 4`)에는 notes/cards/history/answers/progress/localBank/tagStats/vocabDone만 들어가고 **API 키는 절대 넣지 않는다.** v1(answers 없음) 파일도 불러올 수 있고, 앱보다 새 version은 거부한다. 스토어를 백업에 추가하면 `BACKUP_VERSION`(db.js)을 올릴 것.
 - 스토어 구조를 바꾸면 `DB_VERSION`을 올리고 `onupgradeneeded`에서 마이그레이션.
 
 ## 문제 데이터 형식 (prompt.js ↔ sets.js가 공유)
@@ -71,6 +74,8 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 - 기출문제·교재 문장을 그대로 넣지 않는다(저작권). 예시·문제은행은 직접 작성(빈출 항목 목록은 써도 되지만 문장은 새로), 생성은 "새로 쓰기" 지시.
 - 사용자가 입력한 '내 문제'(교재 문제 등)는 기기 IndexedDB(`localBank`)에만 저장. `data/`나 커밋에 절대 넣지 않는다(백업 파일에는 포함, 백업 파일은 .gitignore).
 - 문제은행을 고치면 `tools/check-bank.mjs` 오류 0을 확인하고 docs/bank-plan.md 진행 현황을 갱신.
+- 기본 단어장 문법 `pattern`은 문제은행 `patternTags`와 같은 표기. 단어장을 고치면 `tools/check-vocab.mjs` 오류 0·patternTags 누락 경고 0 확인.
+- 남은 작업 순서와 다음 시작 지점은 docs/bank-plan.md "전체 작업 순서"에 있다.
 - 외부 라이브러리 없이 유지(오프라인 캐시가 단순해짐). 필요하면 이유를 남길 것.
 - 모바일 우선: 400px 폭에서 가로 스크롤 금지, 터치 영역 넉넉하게.
 - 색은 `styles.css`의 토큰만 사용(라이트/다크 둘 다 정의).

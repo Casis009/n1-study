@@ -9,13 +9,14 @@
  *   progress : 문제은행 풀이 상태 { id: unitId, kind, seen, wrong, step, due, lastAt, graduated? }
  *   localBank: 기기 문제은행     { id, kind, source: "ai"|"mine", at, unit: { title, topic, passage, questions } }
  *   tagStats : 패턴별 통계        { id: 패턴, group, seen, wrong, lastAt }
+ *   vocabDone: 기본 단어장 "외웠어요" { id: 단어장 항목 id, at }
  *   answers : 내 답변 노트(면접)  { id, at, updatedAt, cat, question, text, timerSec, followups: null | { at, model, items: [{ q, ko, intent, point }] } }
  *
- * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
+ * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가, v4: vocabDone 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
  */
 const DB_NAME = "n1-study";
-const DB_VERSION = 3;
-export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats"];
+const DB_VERSION = 4;
+export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats", "vocabDone"];
 
 let dbPromise = null;
 
@@ -72,11 +73,11 @@ export async function persistState(){
 
 /*
  * 백업: 기기 데이터를 JSON 하나로 내보내고, 불러올 때는 id 기준으로 합친다. API 키는 넣지 않는다.
- * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트),  v3: + progress·localBank(AI 문제·내 문제)·tagStats.
+ * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트),  v3: + progress·localBank(AI 문제·내 문제)·tagStats,  v4: + vocabDone.
  * 예전 version 파일도 그대로 불러올 수 있다.
  */
-export const BACKUP_VERSION = 3;
-const BACKUP_STORES = ["notes", "cards", "history", "answers", "progress", "localBank", "tagStats"];
+export const BACKUP_VERSION = 4;
+const BACKUP_STORES = ["notes", "cards", "history", "answers", "progress", "localBank", "tagStats", "vocabDone"];
 export async function exportAll(){
   const rows = await Promise.all(BACKUP_STORES.map(s => db.all(s)));
   return { app: "n1-study", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), ...Object.fromEntries(BACKUP_STORES.map((s, i) => [s, rows[i]])) };

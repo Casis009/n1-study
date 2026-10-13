@@ -72,7 +72,9 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
       if ([ex.why, ...ex.choiceNotes].some(n => /[①②③④]|[1-4]번|선택지 ?[1-4]/.test(n))) err(`${t} 해설이 선택지를 번호로 지칭(선택지는 섞임)`);
     });
   }
-  if (units.length) index.kinds[kind] = { file, units: units.length, questions: qn, ids: units.map(u => u.id) };
+  const tags = {};
+  for (const u of units) for (const q of u.questions || []) for (const t of q.patternTags || []){ (tags[t] ||= []); if (!tags[t].includes(u.id)) tags[t].push(u.id); }
+  if (units.length) index.kinds[kind] = { file, units: units.length, questions: qn, ids: units.map(u => u.id), tags };
   console.log(`${kind.padEnd(14)} ${String(units.length).padStart(4)}단위 ${String(qn).padStart(4)}문항`);
 }
 

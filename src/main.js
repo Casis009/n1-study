@@ -12,7 +12,8 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
-import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal } from "./bank.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal } from "./bank.js";
+import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
 
 const GROUPS = ["문자·어휘", "문법", "독해"];
 const NUM = ["①", "②", "③", "④"];
@@ -57,9 +58,11 @@ async function addNote(set, q){
   if (q.saved) return;
   q.saved = true;
   const note = { id: set.id + "-" + set.questions.indexOf(q), at: Date.now(), kind: set.kind, title: set.title, passage: set.passage,
-    q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel } };
+    q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [] } };
   notes = [note, ...notes.filter(n => n.id !== note.id)];
   await db.put("notes", note); ensurePersist();
+  const undone = await undoDoneFor(questionKeys(q)).catch(() => 0);   // 외웠다고 체크한 항목을 다시 틀리면 되돌림
+  if (undone) toast(`외웠던 단어장 항목 ${undone}개를 '안 외운 것'으로 되돌렸어요`);
 }
 async function removeNote(id){ notes = notes.filter(n => n.id !== id); await db.del("notes", id); }
 
@@ -376,14 +379,136 @@ function renderNote(){
   v.append(clear);
 }
 
-/* ---------- 단어장 ---------- */
+/* ---------- 단어장: 기본 단어장(data/vocab) / 내 단어장(☆) ---------- */
+const vb = Object.assign({ mode: "base", kind: "grammar", group: "all", view: "todo", cover: false, q: "" }, prefs.get("n1.vocab", {}));
+if (!VKINDS[vb.kind]) vb.kind = "grammar";
+const saveVb = () => prefs.set("n1.vocab", vb);
+const vShown = new Set();
+let vLimit = 50, vToken = 0;
+const V_VIEWS = { todo: "안 외운 것", done: "외운 것", wrong: "자주 틀림", all: "전체" };
+
+/* 틀린 문제(오답노트·패턴 통계)에 나온 표제어 → 틀린 횟수 */
+function vocabWrongMap(){
+  const m = new Map(), bump = (k, n) => { if (k) m.set(k, Math.max(m.get(k) || 0, n)); };
+  for (const t of tagList()) if (t.wrong > 0) bump(t.id, t.wrong);
+  const fromNotes = new Map();
+  for (const n of notes){
+    const keys = new Set([...(n.q.patternTags || []), ...(n.q.ex?.kanji || []).map(k => k.word), ...(n.q.ex?.compare || []).map(c => c.word)]);
+    for (const k of keys) fromNotes.set(k, (fromNotes.get(k) || 0) + 1);
+  }
+  for (const [k, n] of fromNotes) bump(k, n);
+  return m;
+}
+const questionKeys = q => new Set([...(q.patternTags || []), ...(q.ex?.kanji || []).map(k => k.word), ...(q.ex?.compare || []).map(c => c.word)]);
+
+function renderCards(){
+  const v = $("view-cards"); v.replaceChildren();
+  renderCardsCount();
+  const total = Object.keys(VKINDS).reduce((a, k) => a + vocabCount(k), 0);
+  v.append(h("div", { class: "chips sub-tabs" },
+    h("button", { class: "chip", "aria-pressed": String(vb.mode !== "mine"), onclick: () => { vb.mode = "base"; saveVb(); renderCards(); } }, "기본 단어장", h("small", { text: String(total) })),
+    h("button", { class: "chip", "aria-pressed": String(vb.mode === "mine"), onclick: () => { vb.mode = "mine"; saveVb(); renderCards(); } }, "내 단어장", h("small", { text: String(cards.length) }))));
+  if (vb.mode === "mine") myCards(v); else baseVocab(v);
+}
+
+async function baseVocab(v){
+  const token = ++vToken;
+  const kinds = h("div", { class: "chips" }, Object.entries(VKINDS).map(([key, k]) =>
+    h("button", { class: "chip", "aria-pressed": String(vb.kind === key), onclick: () => { vb.kind = key; vb.group = "all"; vLimit = 50; vShown.clear(); saveVb(); renderCards(); } },
+      k.label, h("small", { text: vocabCount(key) ? String(vocabCount(key)) : "준비 중" }))));
+  const top = h("section", { class: "panel stack" }, kinds);
+  v.append(top);
+  const box = h("div", { class: "stack" });
+  v.append(box);
+  if (!vocabCount(vb.kind)){ box.append(h("div", { class: "panel empty" }, h("p", { text: `${VKINDS[vb.kind].label} 단어장은 준비 중이에요.` }))); return; }
+  let items;
+  try { items = await loadVocab(vb.kind); } catch (e){ if (token === vToken) box.append(h("div", { class: "status err", text: e.message })); return; }
+  if (token !== vToken) return;
+
+  const kind = vb.kind, wrong = vocabWrongMap();
+  const inGroup = items.filter(it => vb.group === "all" || vocabGroup(kind, it) === vb.group);
+  const isDone = it => vstate.done.has(it.id), wrongN = it => wrong.get(vocabKey(kind, it)) || 0;
+  const groups = h("div", { class: "chips" }, ["all", ...VKINDS[kind].groups].map(g => {
+    const n = g === "all" ? items.length : items.filter(it => vocabGroup(kind, it) === g).length;
+    return n || g === "all" ? h("button", { class: "chip", lang: kind === "grammar" || g === "all" ? null : "ja", "aria-pressed": String(vb.group === g), onclick: () => { vb.group = g; vLimit = 50; saveVb(); renderCards(); } }, g === "all" ? "전체" : g, h("small", { text: String(n) })) : null;
+  }));
+  const views = h("div", { class: "chips" }, Object.entries(V_VIEWS).map(([key, label]) => {
+    const n = { todo: inGroup.filter(it => !isDone(it)).length, done: inGroup.filter(isDone).length, wrong: inGroup.filter(wrongN).length, all: inGroup.length }[key];
+    return h("button", { class: "chip", "aria-pressed": String(vb.view === key), onclick: () => { vb.view = key; vLimit = 50; saveVb(); renderCards(); } }, label, h("small", { text: String(n) }));
+  }));
+  const search = h("input", { id: "vocab-q", type: "search", placeholder: "표제어·읽기·뜻·예문으로 찾기", value: vb.q });
+  search.addEventListener("input", e => { vb.q = e.target.value; vLimit = 50; saveVb(); paintList(); });
+  const cover = h("input", { id: "vocab-cover", type: "checkbox", onchange: e => { vb.cover = e.target.checked; vShown.clear(); saveVb(); paintList(); } });
+  cover.checked = vb.cover;
+  const left = inGroup.filter(it => !isDone(it)).length;
+  top.append(groups, views,
+    h("div", { class: "row" }, h("label", { class: "field", for: "vocab-q" }, search), h("label", { class: "check", for: "vocab-cover" }, cover, "뜻 가리기 (탭하면 보여요)")),
+    h("p", { class: "hint", text: `남은 ${left} / 전체 ${inGroup.length} · 외움 ${inGroup.length - left} · 자주 틀림 ${inGroup.filter(wrongN).length}` }));
+
+  const list = h("div", { class: "card-list" });
+  box.append(list);
+  function paintList(){
+    list.replaceChildren();
+    const q = vb.q.trim().toLowerCase();
+    const rows = inGroup.filter(it =>
+      (vb.view === "all" || (vb.view === "todo" && !isDone(it)) || (vb.view === "done" && isDone(it)) || (vb.view === "wrong" && wrongN(it))) &&
+      (!q || [it.word, it.pattern, it.reading, it.meaning, it.example, it.exampleKo, it.usage].some(x => (x || "").toLowerCase().includes(q))));
+    if (vb.view === "wrong") rows.sort((a, b) => wrongN(b) - wrongN(a));
+    if (!rows.length){ list.append(h("p", { class: "hint", text: vb.view === "todo" && !q ? "이 분류는 다 외웠어요." : "조건에 맞는 항목이 없어요." })); return; }
+    for (const it of rows.slice(0, vLimit)) list.append(vocabCard(kind, it, wrongN(it)));
+    if (rows.length > vLimit) list.append(h("button", { class: "btn small ghost", onclick: () => { vLimit += 50; paintList(); } }, `더 보기 (${rows.length - vLimit}개 남음)`));
+  }
+  paintList();
+}
+
+function vocabCard(kind, it, wrongN){
+  const done = vstate.done.has(it.id), hidden = vb.cover && !vShown.has(it.id);
+  const card = h("article", { class: "card vocab" + (hidden ? " covered" : "") + (done ? " done" : ""),
+    onclick: () => { if (vb.cover){ vShown.has(it.id) ? vShown.delete(it.id) : vShown.add(it.id); renderCards(); } } });
+  const doneBtn = h("button", { class: "btn small" + (done ? " primary" : " ghost"), "aria-pressed": String(done),
+    onclick: async e => { e.stopPropagation(); await setDone(it.id, !done); toast(done ? "다시 '안 외운 것'으로 돌렸어요" : "외웠어요로 표시했어요"); renderCards(); } }, done ? "✓ 외웠어요" : "외웠어요");
+  const head = kind === "grammar" ? it.pattern : it.word;
+  const showReading = kind !== "grammar" && !(hidden && kind === "kanji");
+  card.append(h("div", { class: "card-top" },
+    h("b", { class: "front", lang: "ja", text: head }),
+    showReading && it.reading ? h("span", { class: "r", lang: "ja", text: `（${it.reading}）` }) : null,
+    kind === "words" && it.pos ? h("span", { class: "tag", text: it.pos }) : null,
+    wrongN ? h("span", { class: "tag wrong", text: `자주 틀림 ×${wrongN}` }) : null,
+    doneBtn));
+  if (hidden){ card.append(h("div", { class: "hint", text: kind === "kanji" ? "탭해서 읽기·뜻 보기" : "탭해서 뜻 보기" })); return card; }
+  const body = h("div", { class: "card-body" }, h("div", { text: it.meaning }));
+  if (kind === "grammar" && it.connection) body.append(h("div", { class: "src" }, h("b", { text: "접속 " }), h("span", { lang: "ja", text: it.connection })));
+  if (kind === "kanji" && it.confusable?.length) body.append(h("div", { class: "src" }, "헷갈리는 읽기 ", it.confusable.map(c => h("span", { class: "x-read", lang: "ja", text: `✕ ${c}` }))));
+  if (kind === "words"){
+    if (it.usage) body.append(h("div", { class: "src" }, h("b", { text: "연어 " }), h("span", { lang: "ja", text: it.usage })));
+    if (it.synonyms?.length) body.append(h("div", { class: "src" }, h("b", { text: "유의어 " }), h("span", { lang: "ja", text: it.synonyms.join("・") })));
+  }
+  body.append(h("div", { class: "extra", lang: "ja", text: it.example }), h("div", { class: "src", text: it.exampleKo }));
+  if (kind === "grammar" && it.similar?.length) body.append(h("div", { class: "similar" }, it.similar.map(s =>
+    h("div", null, h("b", { lang: "ja", text: s.pattern }), h("span", { text: " — " + s.diff })))));
+  if (kind === "grammar"){
+    const n = tagUnitCount(it.pattern);
+    body.append(h("div", null, h("button", { class: "btn small", disabled: !n, onclick: async e => { e.stopPropagation(); await solveTag(it.pattern); } },
+      n ? `이 문법 문제 풀기 (${n})` : "이 문법 문제 풀기 · 아직 문제 없음")));
+  }
+  card.append(body);
+  return card;
+}
+async function solveTag(tag){
+  try {
+    const set = await pickByTag(tag);
+    if (!set){ toast("이 문법 문제가 아직 없어요"); return; }
+    current = set; saveCurrent(); showTab("solve");
+    document.querySelector(".set")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e){ toast(e?.message || "문제를 열지 못했어요"); }
+}
+
+/* ---------- 내 단어장(☆) ---------- */
 const CARD_TYPES = { all: "전체", kanji: "한자", grammar: "문법", compare: "비슷한 말", keigo: "경어" };
 let cardFilter = "all", cardQuery = "", hideMeaning = false;
 const revealed = new Set();
 function renderCardsCount(){ $("card-count").textContent = cards.length; }
-function renderCards(){
-  const v = $("view-cards"); v.replaceChildren();
-  renderCardsCount();
+function myCards(v){
   if (!cards.length){
     v.append(h("div", { class: "panel empty" }, h("p", { text: "단어장이 비어 있어요." }),
       h("p", { class: "hint", text: "해설의 한자·문법·비슷한 말 옆 ☆를 누르면 여기에 저장돼요. 이 기기 안에 저장되고 오프라인에서도 볼 수 있어요." })));
@@ -703,7 +828,7 @@ async function renderSettings(){
   /* 기기 저장 · 백업 */
   persist = await persistState();
   const store = h("section", { class: "panel stack" }, h("div", { class: "label", text: "이 기기에 저장된 데이터" }),
-    h("p", null, `오답노트 ${notes.length}개 · 단어장 ${cards.length}개 · 학습 기록 ${history.length}개 · 면접 답변 ${answers.length}개 · 문제은행 기록 ${bank.progress.size}개 · 내 문제 ${bank.local.filter(r => r.source === "mine").length}개 · AI 문제 ${bank.local.filter(r => r.source === "ai").length}개`),
+    h("p", null, `오답노트 ${notes.length}개 · 단어장 ${cards.length}개 · 학습 기록 ${history.length}개 · 면접 답변 ${answers.length}개 · 외운 단어 ${vstate.done.size}개 · 문제은행 기록 ${bank.progress.size}개 · 내 문제 ${bank.local.filter(r => r.source === "mine").length}개 · AI 문제 ${bank.local.filter(r => r.source === "ai").length}개`),
     h("p", { class: "hint" }, persist === "granted"
       ? "영구 저장이 허용돼 있어요. 브라우저가 공간 정리를 할 때도 지워지지 않아요."
       : "브라우저가 공간이 부족할 때 데이터를 지울 수 있어요. 홈 화면에 설치하면 더 안전하고, 가끔 백업 파일을 내보내 두세요.",
@@ -712,7 +837,7 @@ async function renderSettings(){
       h("button", { class: "btn", onclick: doExport }, "백업 파일 내보내기"),
       h("label", { class: "btn", for: "import-file" }, "백업 불러오기"),
       h("input", { id: "import-file", type: "file", accept: "application/json,.json", hidden: true, onchange: doImport })),
-    h("p", { class: "hint", text: "백업 파일로 휴대폰 ↔ PC 사이에 오답노트·단어장·학습 기록·면접 답변·복습 일정·패턴 통계·내 문제를 옮길 수 있어요. 불러오면 기존 데이터와 합쳐져요. (API 키는 들어가지 않아요)" }));
+    h("p", { class: "hint", text: "백업 파일로 휴대폰 ↔ PC 사이에 오답노트·단어장·학습 기록·면접 답변·복습 일정·패턴 통계·내 문제·외운 단어를 옮길 수 있어요. 불러오면 기존 데이터와 합쳐져요. (API 키는 들어가지 않아요)" }));
   v.append(store);
 
   /* Gemini */
@@ -880,6 +1005,7 @@ async function loadAll(){
   notes.sort((a, b) => b.at - a.at); cards.sort((a, b) => b.at - a.at); answers.sort((a, b) => b.at - a.at);
   cardIds.clear(); for (const c of cards) cardIds.add(c.id);
   await loadBankState();
+  await loadVocabState();
 }
 async function boot(){
   for (const t of TABS) $("tab-" + t).addEventListener("click", () => showTab(t));
@@ -887,7 +1013,7 @@ async function boot(){
   const dd = Math.round((EXAM - today) / 86400000);
   $("dday").append(h("span", { text: "12월 6일(일) 시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
 
-  await loadIndex();
+  await Promise.all([loadIndex(), loadVocabIndex()]);
   try {
     await loadAll();
     /* 이전 버전(한 파일짜리)에서 localStorage에 쌓인 오답노트 옮기기 */

@@ -88,6 +88,29 @@ export function buildSet(kind, units){
   return set;
 }
 
+/* 특정 패턴(patternTags) 문제만 출제: 그 패턴 문제가 가장 많은 유형에서, 안 푼 것 → 복습 → 오래전에 푼 것 순. */
+function tagUnits(tag){
+  const byKind = new Map();
+  for (const [kind, v] of Object.entries(index.kinds)) if (v.tags?.[tag]?.length) byKind.set(kind, new Set(v.tags[tag]));
+  for (const r of state.local) if (r.unit.questions?.some(q => q.patternTags?.includes(tag))){
+    if (!byKind.has(r.kind)) byKind.set(r.kind, new Set());
+    byKind.get(r.kind).add(r.id);
+  }
+  return byKind;
+}
+export function tagUnitCount(tag){ let n = 0; for (const ids of tagUnits(tag).values()) n += ids.size; return n; }
+export async function pickByTag(tag, count = 5){
+  const byKind = tagUnits(tag);
+  if (!byKind.size) return null;
+  const [kind, ids] = [...byKind].sort((a, b) => b[1].size - a[1].size)[0];
+  const now = Date.now(), rank = u => ({ new: 0, due: 1 }[status(u.id, now)] ?? 2);
+  const order = shuffle((await loadUnits(kind)).filter(u => ids.has(u.id)))
+    .sort((a, b) => rank(a) - rank(b) || (state.progress.get(a.id)?.lastAt || 0) - (state.progress.get(b.id)?.lastAt || 0));
+  const set = buildSet(kind, isUnitKind(kind) ? order.slice(0, count) : order.slice(0, 1));
+  set.focusTag = tag;
+  return set;
+}
+
 /* 결과 기록. 같은 세트에서 "찍어서 맞힘" 저장/취소로 결과가 바뀌면 처음 상태(snap)에서 다시 계산한다. */
 function nextProgress(prev, id, kind, ok, now){
   const p = prev ? { ...prev } : { id, kind, seen: 0, wrong: 0, step: -1, due: null };
