@@ -11,7 +11,7 @@ const hangul = s => /[가-힣]/.test(s || "");
 const hira = s => /^[ぁ-ゖー]+$/.test(s || "");
 const kana = s => /^[ぁ-ゖァ-ヺー]+$/.test(s || "");
 const errors = [], warns = [], ids = new Set();
-const NEW_FIELDS_STRICT = false;   // 예문 gloss: 기존 데이터 보완이 끝나면 true로 바꿔 누락을 오류로
+const NEW_FIELDS_STRICT = true;   // 예문 gloss: 기존 데이터 보완이 끝나면 true로 바꿔 누락을 오류로
 const index = { generated: new Date().toISOString().slice(0, 10), kinds: {} };
 const keys = { grammar: new Set(), kanji: new Set(), words: new Set() };
 

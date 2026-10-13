@@ -13,7 +13,7 @@ const LEN = { reading_short: [200, 350], reading_mid: [450, 700], reading_long: 
 
 const errors = [], warns = [], ids = new Set(), stems = new Map(), tagCount = new Map();
 // 새 해설 필드(translation·choicesKo·gloss·passageKo·passageGloss): 기존 데이터 보완이 끝나면 true로 바꿔 누락을 오류로
-const NEW_FIELDS_STRICT = false;
+const NEW_FIELDS_STRICT = true;
 // choicesKo.reading은 20자 이하 선택지(단어·구)에 한자가 있을 때 필수. 문장 선택지는 ""이고 그 속 단어는 gloss로
 const hasKanji = s => /[一-龯々]/.test(s || "");
 const kanaOnly = s => /^[ぁ-ゖァ-ヺー・、。]+$/.test(s || "");
