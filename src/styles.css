@@ -205,3 +205,29 @@ nav.tabs button{flex:none;white-space:nowrap}
 .kg-ng .x{color:var(--ng);font-weight:600}
 .kg-ng .jp{text-decoration:line-through;text-decoration-color:var(--ng)}
 .kg-ng .why{flex-basis:100%;color:var(--muted)}
+
+/* ---- 문제은행 · 패턴 통계 · 내 문제 ---- */
+.chip .bank-n{margin-left:6px;font-size:11px;opacity:.85}
+.ai-box{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--paper)}
+.ai-box > summary{cursor:pointer;font-size:14px;font-weight:500;color:var(--muted)}
+.ai-box[open] > summary{margin-bottom:10px}
+.tag.review{border-color:var(--mark-ink);color:var(--mark-ink)}
+.ptags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tagstat{width:100%;border-collapse:collapse;font-size:14px}
+.tagstat th,.tagstat td{text-align:left;padding:6px 4px;border-top:1px solid var(--line)}
+.tagstat th{font-size:12px;font-weight:600;color:var(--muted)}
+.tagstat th:nth-child(n+2),.tagstat td:nth-child(n+2){text-align:right;width:3.6em}
+.tagstat td:first-child{font-family:var(--mincho);word-break:break-all}
+.tagstat tr.ng td:nth-child(3){color:var(--ng)}
+.mine > summary{cursor:pointer;list-style:none}
+.mine > summary::-webkit-details-marker{display:none}
+.mine > summary .label{margin:0}
+.mine[open] > summary{margin-bottom:12px}
+.mine .field textarea{min-height:0}
+.mine-choices{display:grid;gap:6px}
+.mine-choice{display:grid;grid-template-columns:auto auto 1fr;gap:8px;align-items:center}
+.mine-choice input[type=radio]{width:20px;height:20px;margin:0}
+.mine-choice input[type=text]{width:100%;min-width:0;border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:8px 10px}
+.mine-list{list-style:none;margin:0;padding:0;display:grid}
+.mine-list li{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.mine-list .stemline{font-family:var(--mincho);font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}

@@ -6,13 +6,16 @@
  *   cards   : 단어장(저장한 표현) { id, at, type: "kanji"|"grammar"|"compare", front, reading, meaning, extra, source }
  *   history : 풀이 기록          { id, at, kind, title, total, right, elapsedMs }
  *   meta    : 기타              { id: "current", value: <풀던 세트> }
+ *   progress : 문제은행 풀이 상태 { id: unitId, kind, seen, wrong, step, due, lastAt, graduated? }
+ *   localBank: 기기 문제은행     { id, kind, source: "ai"|"mine", at, unit: { title, topic, passage, questions } }
+ *   tagStats : 패턴별 통계        { id: 패턴, group, seen, wrong, lastAt }
  *   answers : 내 답변 노트(면접)  { id, at, updatedAt, cat, question, text, timerSec, followups: null | { at, model, items: [{ q, ko, intent, point }] } }
  *
- * v2: answers 스토어 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
+ * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
  */
 const DB_NAME = "n1-study";
-const DB_VERSION = 2;
-export const STORES = ["notes", "cards", "history", "meta", "answers"];
+const DB_VERSION = 3;
+export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats"];
 
 let dbPromise = null;
 
@@ -69,13 +72,14 @@ export async function persistState(){
 
 /*
  * 백업: 기기 데이터를 JSON 하나로 내보내고, 불러올 때는 id 기준으로 합친다. API 키는 넣지 않는다.
- * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트). v1 파일도 그대로 불러올 수 있다.
+ * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트),  v3: + progress·localBank(AI 문제·내 문제)·tagStats.
+ * 예전 version 파일도 그대로 불러올 수 있다.
  */
-export const BACKUP_VERSION = 2;
-const BACKUP_STORES = ["notes", "cards", "history", "answers"];
+export const BACKUP_VERSION = 3;
+const BACKUP_STORES = ["notes", "cards", "history", "answers", "progress", "localBank", "tagStats"];
 export async function exportAll(){
-  const [notes, cards, history, answers] = await Promise.all(BACKUP_STORES.map(s => db.all(s)));
-  return { app: "n1-study", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), notes, cards, history, answers };
+  const rows = await Promise.all(BACKUP_STORES.map(s => db.all(s)));
+  return { app: "n1-study", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), ...Object.fromEntries(BACKUP_STORES.map((s, i) => [s, rows[i]])) };
 }
 export async function importAll(data){
   if (!data || data.app !== "n1-study") throw new Error("N1 연습장 백업 파일이 아니에요.");

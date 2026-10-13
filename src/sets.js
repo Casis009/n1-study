@@ -21,8 +21,10 @@ export function normalizeQ(q, oneBased){
   const ex = q.ex || q.explanation || {};
   const notes = arr(ex.choiceNotes).map(asStr);
   while (notes.length < 4) notes.push("");
+  const tags = arr(q.patternTags).map(asStr).map(t => t.trim()).filter(Boolean).slice(0, 6);
   return {
-    stem: asStr(q.stem), choices, answer: ans,
+    stem: asStr(q.stem), choices, answer: ans, patternTags: tags,
+    ...(typeof q.unitId === "string" ? { unitId: q.unitId } : {}),
     ex: {
       why: asStr(ex.why),
       kanji: arr(ex.kanji).filter(k => k && k.word).map(k => ({ word: asStr(k.word), reading: asStr(k.reading), meaning: asStr(k.meaning) })).slice(0, 10),

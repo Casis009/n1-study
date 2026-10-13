@@ -1,6 +1,7 @@
 /*
  * N1 연습장 — 화면과 상태.
- * 데이터 흐름: 문제 생성(gemini.js) → 정리(sets.js) → 풀이 → 오답노트/단어장/기록을 IndexedDB(db.js)에 저장.
+ * 데이터 흐름: 문제은행(bank.js, data/bank) 또는 Gemini 생성(gemini.js) → 정리(sets.js) → 풀이
+ *            → 오답노트/단어장/기록/복습 일정/패턴 통계를 IndexedDB(db.js)에 저장.
  */
 import { h, $, prefs, fmtTime } from "./dom.js";
 import { KINDS, TOPICS, EXAM } from "./kinds.js";
@@ -11,6 +12,7 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal } from "./bank.js";
 
 const GROUPS = ["문자·어휘", "문법", "독해"];
 const NUM = ["①", "②", "③", "④"];
@@ -22,7 +24,7 @@ if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
 let current = null;
 let notes = [], cards = [], history = [], answers = [];
 const cardIds = new Set();
-let busy = null, lastError = "", toastTimer = null;
+let busy = null, lastError = "", bankMsg = "", toastTimer = null, aiOpen = false;
 let persist = "unsupported";
 
 const savePrefs = () => { prefs.set("n1.settings", settings); prefs.set("n1.gen", gen); };
@@ -35,16 +37,19 @@ function toast(msg){
 }
 async function ensurePersist(){ if (persist !== "granted") persist = await requestPersist(); }
 
-/* ---------- weak points ---------- */
-function weakPatterns(limit){
-  const m = new Map();
-  for (const n of notes) if (!KINDS[n.kind]?.vocab) for (const g of n.q.ex.grammar) m.set(g.pattern, (m.get(g.pattern) || 0) + 1);
-  return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
-}
-function weakWords(limit){
-  const m = new Map();
-  for (const n of notes) if (KINDS[n.kind]?.vocab) for (const w of n.q.ex.kanji) m.set(w.word, (m.get(w.word) || 0) + 1);
-  return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+/* ---------- weak points: 패턴별 통계(tagStats)에서 틀린 횟수가 많은 순 ---------- */
+const weakTags = (vocab, limit) => tagList().filter(t => t.wrong > 0 && (t.group === "문자·어휘") === !!vocab).slice(0, limit);
+const fmtWhen = ts => {
+  const hrs = Math.round((ts - Date.now()) / 3600000);
+  if (hrs < 1) return "곧";
+  if (hrs < 24) return `${hrs}시간 후`;
+  const d = new Date(ts); return `${Math.round(hrs / 24)}일 후 (${d.getMonth() + 1}/${d.getDate()})`;
+};
+/* 모델 출력·내 문제를 검증하고 문제은행 단위로 나눈다(풀이용 필드는 뺀다). 형식이 틀리면 throw. */
+function cleanUnits(kind, raw){
+  const set = prepSet(structuredClone({ ...raw, kind }), { fallbackKind: kind });
+  const questions = set.questions.map(({ stem, choices, answer, patternTags, ex }) => ({ stem, choices, answer, patternTags, ex }));
+  return splitUnits(kind, { title: set.title, topic: set.topic, passage: set.passage, questions });
 }
 
 /* ---------- notes / cards / history ---------- */
@@ -91,10 +96,15 @@ async function generate(){
   renderSolve();
   busy.timer = setInterval(() => { const s = $("busy-sec"); if (s) s.textContent = Math.round((Date.now() - busy.started) / 1000) + "초"; }, 1000);
   try {
-    const weak = (KINDS[gen.kind].vocab ? weakWords(8) : weakPatterns(6)).map(([p]) => p);
+    const vocab = !!KINDS[gen.kind].vocab;
+    const weak = weakTags(vocab, vocab ? 8 : 6).map(t => t.id);
     const raw = await callGemini(buildPrompt(gen, weak), { key: settings.key, model: settings.model, signal: ctl.signal });
-    raw.kind = gen.kind; raw.engine = "Gemini";
-    current = prepSet(raw, { shuffle: true, fallbackKind: gen.kind });
+    const units = cleanUnits(gen.kind, raw);
+    try {
+      const rows = await addLocalUnits(gen.kind, units, "ai");
+      current = buildSet(gen.kind, rows.map(r => ({ ...r.unit, id: r.id })));
+    } catch { current = prepSet(structuredClone({ ...raw, kind: gen.kind }), { shuffle: true, fallbackKind: gen.kind }); }   // 기기 저장소를 못 쓰면 풀기만
+    current.engine = "Gemini";
     saveCurrent();
   } catch (e){
     if (!(e && e.name === "AbortError")) lastError = e?.message || "문제를 만들지 못했어요.";
@@ -102,6 +112,17 @@ async function generate(){
     clearInterval(busy.timer); busy = null; renderSolve();
     if (!lastError) document.querySelector(".set")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
+}
+
+async function startBank(force = false){
+  bankMsg = "";
+  try {
+    const set = await pickSet(gen.kind, gen.count, { force });
+    if (set){ current = set; saveCurrent(); }
+    else bankMsg = "이 유형은 문제은행에 아직 문제가 없어요.";
+  } catch (e){ bankMsg = e?.message || "문제은행을 열지 못했어요."; }
+  renderSolve();
+  if (!bankMsg) document.querySelector(".set")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /* ---------- shared rendering ---------- */
@@ -143,6 +164,7 @@ function starBtn(type, item, source){
 }
 function explanationNode(q, source){
   const ex = q.ex, box = h("div", { class: "ex" });
+  if (q.patternTags?.length) box.append(h("div", { class: "ptags" }, h("span", { class: "hint", text: "패턴" }), q.patternTags.map(t => h("span", { class: "tag", lang: "ja", text: t }))));
   if (ex.why) box.append(h("section", null, h("h4", { text: "정답 근거" }), h("p", { text: ex.why })));
   if (ex.kanji.length) box.append(h("section", null, h("h4", { text: "한자 · 읽기" }),
     h("div", { class: "kanji" }, ex.kanji.map(k => h("div", { class: "kj" },
@@ -200,8 +222,10 @@ function renderSolve(){
   for (const grp of GROUPS){
     const chips = h("div", { class: "chips" });
     for (const [key, k] of Object.entries(KINDS)) if (k.group === grp)
-      chips.append(h("button", { class: "chip", "aria-pressed": String(gen.kind === key), onclick: () => { gen.kind = key; savePrefs(); renderSolve(); } },
-        k.label, h("small", { lang: "ja", text: k.jp })));
+    { const c = bankCounts(key);
+      chips.append(h("button", { class: "chip", "aria-pressed": String(gen.kind === key), onclick: () => { gen.kind = key; bankMsg = ""; savePrefs(); renderSolve(); } },
+        k.label, h("small", { lang: "ja", text: k.jp }),
+        h("small", { class: "bank-n mono", text: c.total ? `${c.left}/${c.total}${c.due ? " ·복습" + c.due : ""}` : "준비 중" }))); }
     kindBox.append(h("div", null, h("div", { class: "label", text: grp }), chips));
   }
   g.append(kindBox);
@@ -215,26 +239,45 @@ function renderSolve(){
   } else {
     g.append(h("div", null, h("div", { class: "label", text: "구성" }), h("div", { class: "hint", text: k.fixed })));
   }
+  /* 문제은행 */
+  const c = bankCounts(gen.kind);
+  const bankRow = h("div", { class: "row" });
+  bankRow.append(h("button", { class: "btn primary", disabled: !(c.left + c.due) || !!busy, onclick: () => startBank() }, "문제은행에서 풀기"));
+  if (!c.total) bankRow.append(h("span", { class: "hint", text: "이 유형은 문제은행을 준비 중이에요. 아래 AI 생성이나 기록·설정의 '내 문제 추가'를 쓸 수 있어요." }));
+  else {
+    bankRow.append(h("span", { class: "hint", text: `남은 ${c.left} / 전체 ${c.total}${c.unit} · 지금 복습 ${c.due}${c.wait ? ` · 복습 대기 ${c.wait}` : ""}` }));
+    if (!(c.left + c.due)) bankRow.append(h("span", { class: "hint", text: `다 풀었어요${c.nextDue ? ` · 다음 복습 ${fmtWhen(c.nextDue)}` : ""}` }),
+      h("button", { class: "btn small", disabled: !!busy, onclick: () => startBank(true) }, "그래도 풀기"));
+  }
+  g.append(bankRow);
+  if (bankMsg) g.append(h("div", { class: "status err", role: "alert", text: bankMsg }));
+
+  /* AI 생성(보조) */
+  const ai = h("details", { class: "ai-box" });
+  ai.open = aiOpen || !!busy || !!lastError;
+  ai.addEventListener("toggle", () => { aiOpen = ai.open; });
+  ai.append(h("summary", { text: "AI로 새 문제 (Gemini)" }));
   const topicIn = h("input", { id: "topic", type: "text", placeholder: "비우면 무작위 (예: 경제, 의료, 철학)", value: gen.topic, oninput: e => { gen.topic = e.target.value; savePrefs(); } });
-  const weakCount = (k.vocab ? weakWords(8) : weakPatterns(6)).length;
+  const weakCount = weakTags(k.vocab, k.vocab ? 8 : 6).length;
   const weakBox = h("input", { id: "weak", type: "checkbox", onchange: e => { gen.weak = e.target.checked; savePrefs(); } });
   weakBox.checked = gen.weak;
-  g.append(h("div", { class: "row" },
+  const aiBody = h("div", { class: "stack" }, h("div", { class: "row" },
     h("label", { class: "field", for: "topic" }, h("span", { class: "label", text: "주제" }), topicIn),
-    h("label", { class: "check", for: "weak" }, weakBox, `오답노트 약점 ${k.vocab ? "어휘" : "문법"} 반영${weakCount ? ` (${weakCount}개)` : " (아직 없음)"}`)));
-
+    h("label", { class: "check", for: "weak" }, weakBox, `자주 틀린 ${k.vocab ? "어휘" : "문법"} 반영${weakCount ? ` (${weakCount}개)` : " (아직 없음)"}`)));
   const actions = h("div", { class: "row" });
   if (busy){
     actions.append(h("div", { class: "status" }, h("span", { class: "spin" }),
       h("span", null, "Gemini가 문제와 해설을 쓰는 중 · ", h("span", { id: "busy-sec", class: "mono", text: Math.round((Date.now() - busy.started) / 1000) + "초" })),
       h("button", { class: "btn small", onclick: () => busy?.ctl.abort() }, "중지")));
   } else {
-    actions.append(h("button", { class: "btn primary", onclick: generate }, "새 문제 만들기"));
+    actions.append(h("button", { class: "btn", onclick: generate }, "AI로 새 문제 만들기"));
     actions.append(h("span", { class: "hint", text: `오늘 ${callsToday()}회 호출 · 무료 한도 초기화 ${resetTimeKST()}` }));
     if (!settings.key.trim()) actions.append(h("button", { class: "btn small ghost", onclick: () => showTab("set") }, "API 키 입력하기"));
   }
-  g.append(actions);
-  if (lastError) g.append(h("div", { class: "status err", role: "alert", text: lastError }));
+  aiBody.append(actions, h("p", { class: "hint", text: "만든 문제는 이 기기의 문제은행에도 추가돼서 나중에 복습으로 다시 나와요." }));
+  if (lastError) aiBody.append(h("div", { class: "status err", role: "alert", text: lastError }));
+  ai.append(aiBody);
+  g.append(ai);
   g.append(h("div", { class: "hint" }, "예시 세트: ",
     ...[["vocab", "어휘 2문항"], ["grammar", "문법 3문항"], ["reading", "독해 단문"]].map(([key, label]) =>
       h("button", { class: "btn small ghost", onclick: () => { current = prepSet(structuredClone(SAMPLES[key])); saveCurrent(); renderSolve(); } }, label))));
@@ -248,6 +291,7 @@ function renderSolve(){
     h("h2", { lang: "ja", text: s.title }),
     h("div", { class: "meta" },
       s.sample ? h("span", { class: "tag sample", text: "예시" }) : null,
+      s.bank ? h("span", { class: "tag" + (s.review ? " review" : ""), text: s.review ? "복습 포함" : s.engine ? "AI 문제" : "문제은행" }) : null,
       h("span", { class: "tag", lang: "ja", text: KINDS[s.kind]?.jp || "" }),
       s.topic && !s.sample ? h("span", { class: "tag", text: s.topic }) : null,
       h("span", null, "⏱ ", timer))));
@@ -256,14 +300,14 @@ function renderSolve(){
   s.questions.forEach((q, i) => qs.append(questionNode(q, i, {
     source: s.title,
     onChange: async () => {
-      if (!s.done && s.questions.every(x => x.checked)){ s.done = true; s.elapsed = Date.now() - s.startedAt; await logHistory(s); }
+      if (!s.done && s.questions.every(x => x.checked)){ s.done = true; s.elapsed = Date.now() - s.startedAt; await logHistory(s); await recordSet(s).catch(() => {}); }
       saveCurrent(); renderSolve();
     },
     onCheck: async qq => { if (qq.sel !== qq.answer) await addNote(s, qq); renderNoteCount(); },
     extraActions: q.sel === q.answer
       ? [q.saved
-          ? h("button", { class: "btn small ghost", onclick: async () => { q.saved = false; await removeNote(s.id + "-" + i); saveCurrent(); renderSolve(); renderNoteCount(); } }, "오답노트에서 빼기")
-          : h("button", { class: "btn small ghost", onclick: async () => { await addNote(s, q); saveCurrent(); renderSolve(); renderNoteCount(); } }, "찍어서 맞힘 · 오답노트에 저장")]
+          ? h("button", { class: "btn small ghost", onclick: async () => { q.saved = false; await removeNote(s.id + "-" + i); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderSolve(); renderNoteCount(); } }, "오답노트에서 빼기")
+          : h("button", { class: "btn small ghost", onclick: async () => { await addNote(s, q); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderSolve(); renderNoteCount(); } }, "찍어서 맞힘 · 오답노트에 저장 · 복습에 넣기")]
       : [h("span", { class: "hint", text: "오답노트에 저장됐어요" })]
   })));
   sec.append(qs);
@@ -272,7 +316,7 @@ function renderSolve(){
     sec.append(h("div", { class: "summary panel" },
       h("div", null, h("div", { class: "label", text: "결과" }), h("span", { class: "score", text: `${right} / ${s.questions.length}` }),
         h("span", { class: "hint", text: `  ·  소요 ${fmtTime(s.elapsed)}` })),
-      h("button", { class: "btn primary", disabled: !!busy, onclick: () => { window.scrollTo({ top: 0, behavior: "smooth" }); generate(); } }, "같은 유형 새로 만들기")));
+      h("button", { class: "btn primary", disabled: !!busy, onclick: () => { window.scrollTo({ top: 0, behavior: "smooth" }); startBank(); } }, "같은 유형 계속 풀기")));
   }
   v.append(sec);
 }
@@ -290,12 +334,12 @@ function renderNote(){
       h("p", { class: "hint", text: "문제를 풀다가 틀리면 여기에 자동으로 모여요. 이 기기 안에 저장되고, 오프라인에서도 볼 수 있어요." })));
     return;
   }
-  const weak = weakPatterns(12), weakW = weakWords(12);
-  const chipsOf = list => h("div", { class: "weak" }, list.map(([p, n]) => h("span", { lang: "ja" }, p, h("i", { text: `×${n}` }))));
+  const weak = weakTags(false, 12), weakW = weakTags(true, 12);
+  const chipsOf = list => h("div", { class: "weak" }, list.map(t => h("span", { lang: "ja", title: `출제 ${t.seen}회 · 틀림 ${t.wrong}회` }, t.id, h("i", { text: `틀림${t.wrong}·출제${t.seen}` }))));
   if (weak.length || weakW.length) v.append(h("section", { class: "panel stack" },
-    weak.length ? h("div", null, h("div", { class: "label", text: "자주 틀린 문법" }), chipsOf(weak)) : null,
+    weak.length ? h("div", null, h("div", { class: "label", text: "자주 틀린 문법·독해 패턴" }), chipsOf(weak)) : null,
     weakW.length ? h("div", null, h("div", { class: "label", text: "자주 틀린 어휘" }), chipsOf(weakW)) : null,
-    h("div", { class: "hint", text: "새 문제를 만들 때 '약점 반영'을 켜 두면 이 문법·어휘가 섞여 나와요." })));
+    h("div", { class: "hint", text: "찍어서 맞힌 문제도 틀린 것으로 셉니다. 전체 통계는 기록·설정 탭에 있어요." })));
 
   const filters = h("div", { class: "chips", style: "margin-top:14px" });
   for (const f of ["전체", ...GROUPS]){
@@ -654,12 +698,12 @@ async function renderSettings(){
     }
     rec.append(ul);
   }
-  v.append(rec);
+  v.append(rec, tagStatsPanel(), minePanel());
 
   /* 기기 저장 · 백업 */
   persist = await persistState();
   const store = h("section", { class: "panel stack" }, h("div", { class: "label", text: "이 기기에 저장된 데이터" }),
-    h("p", null, `오답노트 ${notes.length}개 · 단어장 ${cards.length}개 · 학습 기록 ${history.length}개 · 면접 답변 ${answers.length}개`),
+    h("p", null, `오답노트 ${notes.length}개 · 단어장 ${cards.length}개 · 학습 기록 ${history.length}개 · 면접 답변 ${answers.length}개 · 문제은행 기록 ${bank.progress.size}개 · 내 문제 ${bank.local.filter(r => r.source === "mine").length}개 · AI 문제 ${bank.local.filter(r => r.source === "ai").length}개`),
     h("p", { class: "hint" }, persist === "granted"
       ? "영구 저장이 허용돼 있어요. 브라우저가 공간 정리를 할 때도 지워지지 않아요."
       : "브라우저가 공간이 부족할 때 데이터를 지울 수 있어요. 홈 화면에 설치하면 더 안전하고, 가끔 백업 파일을 내보내 두세요.",
@@ -668,7 +712,7 @@ async function renderSettings(){
       h("button", { class: "btn", onclick: doExport }, "백업 파일 내보내기"),
       h("label", { class: "btn", for: "import-file" }, "백업 불러오기"),
       h("input", { id: "import-file", type: "file", accept: "application/json,.json", hidden: true, onchange: doImport })),
-    h("p", { class: "hint", text: "백업 파일로 휴대폰 ↔ PC 사이에 오답노트·단어장·학습 기록·면접 답변을 옮길 수 있어요. 불러오면 기존 데이터와 합쳐져요. (API 키는 들어가지 않아요)" }));
+    h("p", { class: "hint", text: "백업 파일로 휴대폰 ↔ PC 사이에 오답노트·단어장·학습 기록·면접 답변·복습 일정·패턴 통계·내 문제를 옮길 수 있어요. 불러오면 기존 데이터와 합쳐져요. (API 키는 들어가지 않아요)" }));
   v.append(store);
 
   /* Gemini */
@@ -687,6 +731,114 @@ async function renderSettings(){
     `회 · 무료 한도는 미국 태평양 시간 자정(한국 ${resetTimeKST()})에 초기화돼요. 문제 세트 1개 = 호출 1회.`));
   v.append(p);
 }
+/* 패턴별 통계: 문항의 patternTags 기준 출제 횟수 · 틀린 횟수(찍어서 맞힘 포함) */
+let tagGroup = "전체", tagAll = false;
+function tagStatsPanel(){
+  const sec = h("section", { class: "panel stack" }, h("div", { class: "label", text: "패턴별 통계" }));
+  const all = tagList();
+  if (!all.length){ sec.append(h("p", { class: "hint", text: "문제은행 문제를 풀면 문법·어휘 패턴별로 출제 횟수와 틀린 횟수가 쌓여요." })); return sec; }
+  const chips = h("div", { class: "chips" });
+  for (const g of ["전체", ...GROUPS]){
+    const n = g === "전체" ? all.length : all.filter(t => t.group === g).length;
+    chips.append(h("button", { class: "chip", "aria-pressed": String(tagGroup === g), onclick: () => { tagGroup = g; tagAll = false; renderSettings(); } }, g, h("small", { text: String(n) })));
+  }
+  const rows = all.filter(t => tagGroup === "전체" || t.group === tagGroup);
+  const table = h("table", { class: "tagstat" },
+    h("thead", null, h("tr", null, h("th", { text: "패턴" }), h("th", { text: "출제" }), h("th", { text: "틀림" }), h("th", { text: "정답률" }))),
+    h("tbody", null, (tagAll ? rows : rows.slice(0, 20)).map(t => h("tr", { class: t.wrong ? "ng" : null },
+      h("td", { lang: "ja", text: t.id }), h("td", { class: "mono", text: String(t.seen) }), h("td", { class: "mono", text: String(t.wrong) }),
+      h("td", { class: "mono", text: t.seen ? Math.round((t.seen - t.wrong) / t.seen * 100) + "%" : "–" })))));
+  sec.append(chips, table);
+  if (rows.length > 20) sec.append(h("button", { class: "btn small ghost", onclick: () => { tagAll = !tagAll; renderSettings(); } }, tagAll ? "접기" : `더 보기 (${rows.length - 20}개)`));
+  return sec;
+}
+
+/* 내 문제 추가: 교재 문제 등을 이 기기 IndexedDB(localBank)에만 저장. 저장소 파일로는 절대 쓰지 않는다. */
+const mine = Object.assign({ open: false, kind: "grammar_blank", mode: "form", passage: "", stem: "", choices: ["", "", "", ""], answer: 0, why: "", tags: "", json: "" }, prefs.get("n1.mine", {}));
+const saveMine = () => prefs.set("n1.mine", mine);
+let mineDel = null;
+function minePanel(){
+  const list = bank.local.filter(r => r.source === "mine");
+  const det = h("details", { class: "panel mine" });
+  det.open = mine.open;
+  det.addEventListener("toggle", () => { mine.open = det.open; saveMine(); });
+  det.append(h("summary", null, h("span", { class: "label", text: `내 문제 추가 · 이 기기에만 저장 (${list.length}개)` })));
+  const body = h("div", { class: "stack" });
+  body.append(h("p", { class: "hint", text: "교재 문제 등을 직접 넣으면 문제은행에 섞여 나오고, 틀리면 복습 일정에도 들어가요. 이 기기에만 저장되고 백업 파일에는 포함돼요. GitHub 저장소에는 올라가지 않아요." }));
+  const sel = h("select", { id: "mine-kind", onchange: e => { mine.kind = e.target.value; saveMine(); renderSettings(); } },
+    Object.entries(KINDS).map(([key, k]) => { const o = h("option", { value: key }, `${k.group} · ${k.label} (${k.jp})`); o.selected = key === mine.kind; return o; }));
+  body.append(h("label", { class: "field", for: "mine-kind" }, h("span", { class: "label", text: "유형" }), sel));
+  body.append(h("div", { class: "chips" },
+    h("button", { class: "chip", "aria-pressed": String(mine.mode === "form"), onclick: () => { mine.mode = "form"; saveMine(); renderSettings(); } }, "직접 입력"),
+    h("button", { class: "chip", "aria-pressed": String(mine.mode === "json"), onclick: () => { mine.mode = "json"; saveMine(); renderSettings(); } }, "JSON 붙여넣기")));
+  const inp = (id, key, attrs = {}) => { const el = h(attrs.rows ? "textarea" : "input", { id, lang: "ja", ...attrs, oninput: e => { mine[key] = e.target.value; saveMine(); } }); el.value = mine[key]; return el; };
+  if (mine.mode === "form"){
+    const unitKind = !!KINDS[mine.kind].counts;
+    if (!unitKind) body.append(h("label", { class: "field", for: "mine-passage" }, h("span", { class: "label", text: "지문 (밑줄은 __문구__)" }), inp("mine-passage", "passage", { rows: "6" })));
+    body.append(h("label", { class: "field", for: "mine-stem" }, h("span", { class: "label", text: "문제 (빈칸 （　　）, 밑줄 __문구__)" }), inp("mine-stem", "stem", { rows: "2" })));
+    const ch = h("div", { class: "mine-choices" });
+    mine.choices.forEach((c, i) => {
+      const radio = h("input", { type: "radio", name: "mine-ans", id: `mine-a${i}`, "aria-label": `${i + 1}번이 정답`, onchange: () => { mine.answer = i; saveMine(); } });
+      radio.checked = mine.answer === i;
+      const t = h("input", { id: `mine-c${i}`, type: "text", lang: "ja", placeholder: `선택지 ${i + 1}`, oninput: e => { mine.choices[i] = e.target.value; saveMine(); } });
+      t.value = c;
+      ch.append(h("div", { class: "mine-choice" }, radio, h("label", { for: `mine-a${i}`, class: "mono", text: String(i + 1) }), t));
+    });
+    body.append(h("div", null, h("div", { class: "label", text: "선택지 · 정답에 체크" }), ch));
+    body.append(h("label", { class: "field", for: "mine-why" }, h("span", { class: "label", text: "해설 (선택)" }), inp("mine-why", "why", { rows: "3" })));
+    body.append(h("label", { class: "field", for: "mine-tags" }, h("span", { class: "label", text: "패턴 (선택, 쉼표로 구분: 〜にすぎない, 手分け)" }), inp("mine-tags", "tags", { type: "text" })));
+    body.append(h("div", { class: "row" }, h("button", { class: "btn primary", onclick: saveMineForm }, "저장"),
+      h("button", { class: "btn ghost", onclick: () => { Object.assign(mine, { passage: "", stem: "", choices: ["", "", "", ""], answer: 0, why: "", tags: "" }); saveMine(); renderSettings(); } }, "비우기")));
+  } else {
+    body.append(h("label", { class: "field", for: "mine-json" }, h("span", { class: "label", text: "JSON (문제 1개, 배열, {questions:[…]}, {units:[…]} 모두 가능)" }), inp("mine-json", "json", { rows: "8", lang: null, spellcheck: "false" })));
+    body.append(h("p", { class: "hint", text: '예: {"stem":"…（　　）…","choices":["","","",""],"answer":0,"patternTags":["〜にすぎない"],"ex":{"why":"…"}} · answer는 0부터. 지문형은 {"passage":"…","questions":[…]}' }));
+    body.append(h("div", { class: "row" }, h("button", { class: "btn primary", onclick: saveMineJson }, "검사하고 저장")));
+  }
+  if (list.length){
+    const ul = h("ul", { class: "mine-list" });
+    for (const r of list){
+      const q = r.unit.questions[0];
+      ul.append(h("li", null, h("span", { class: "tag", lang: "ja", text: KINDS[r.kind]?.jp || r.kind }),
+        h("span", { class: "stemline", lang: "ja", text: (q?.stem || r.unit.title || "").replace(/__/g, "") + (r.unit.questions.length > 1 ? ` 외 ${r.unit.questions.length - 1}문항` : "") }),
+        mineDel === r.id
+          ? h("span", { class: "confirm" }, h("button", { class: "btn small", onclick: async () => { await removeLocal(r.id); mineDel = null; renderSettings(); renderSolve(); } }, "지우기"),
+              h("button", { class: "btn small ghost", onclick: () => { mineDel = null; renderSettings(); } }, "취소"))
+          : h("button", { class: "btn small ghost", onclick: () => { mineDel = r.id; renderSettings(); } }, "삭제")));
+    }
+    body.append(h("div", null, h("div", { class: "label", text: "내가 추가한 문제" }), ul));
+  }
+  det.append(body);
+  return det;
+}
+async function saveMineForm(){
+  const q = { stem: mine.stem.trim(), choices: mine.choices.map(c => c.trim()), answer: mine.answer,
+    patternTags: mine.tags.split(/[,、，]/).map(t => t.trim()).filter(Boolean), ex: { why: mine.why.trim() } };
+  if (!q.stem || q.choices.some(c => !c)){ toast("문제와 선택지 4개를 모두 입력하세요"); return; }
+  const unitKind = !!KINDS[mine.kind].counts;
+  try {
+    const units = cleanUnits(mine.kind, { title: "내 문제", passage: unitKind ? "" : mine.passage.trim(), questions: [q] });
+    await addLocalUnits(mine.kind, units, "mine");
+  } catch (e){ toast(e?.message || "저장하지 못했어요"); return; }
+  Object.assign(mine, { stem: "", choices: ["", "", "", ""], answer: 0, why: "", tags: "" });   // 지문은 남겨서 같은 지문 문항을 이어서 넣기 쉽게
+  saveMine(); toast("내 문제에 저장했어요"); renderSettings(); renderSolve();
+}
+async function saveMineJson(){
+  let data;
+  try { data = JSON.parse(mine.json); } catch { toast("JSON 형식이 올바르지 않아요"); return; }
+  const raws = (Array.isArray(data) ? data : data.units ? data.units : [data])
+    .map(u => u && (u.questions ? u : u.stem ? { questions: [u] } : null));
+  let ok = 0, bad = 0;
+  for (const raw of raws){
+    if (!raw){ bad++; continue; }
+    const kind = KINDS[raw.kind] ? raw.kind : mine.kind;
+    try { const units = cleanUnits(kind, { title: raw.title || "내 문제", topic: raw.topic || "", passage: raw.passage || "", questions: raw.questions }); await addLocalUnits(kind, units, "mine"); ok += units.length; }
+    catch { bad++; }
+  }
+  if (ok){ mine.json = ""; saveMine(); }
+  toast(`저장 ${ok}개${bad ? ` · 형식 오류로 건너뜀 ${bad}개` : ""}`);
+  renderSettings(); renderSolve();
+}
+
 async function doExport(){
   const data = await exportAll();
   const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
@@ -702,7 +854,7 @@ async function doImport(e){
   try {
     const counts = await importAll(JSON.parse(await file.text()));
     await loadAll();
-    toast(`불러왔어요: 오답 ${counts.notes} · 단어 ${counts.cards} · 기록 ${counts.history} · 답변 ${counts.answers}`);
+    toast(`불러왔어요: 오답 ${counts.notes} · 단어 ${counts.cards} · 기록 ${counts.history} · 답변 ${counts.answers} · 문제 ${counts.localBank}`);
     renderAll(); renderSettings();
   } catch (err){ toast(err?.message || "백업 파일을 읽지 못했어요."); }
   e.target.value = "";
@@ -727,6 +879,7 @@ async function loadAll(){
   [notes, cards, history, answers] = await Promise.all([db.all("notes"), db.all("cards"), db.all("history"), db.all("answers")]);
   notes.sort((a, b) => b.at - a.at); cards.sort((a, b) => b.at - a.at); answers.sort((a, b) => b.at - a.at);
   cardIds.clear(); for (const c of cards) cardIds.add(c.id);
+  await loadBankState();
 }
 async function boot(){
   for (const t of TABS) $("tab-" + t).addEventListener("click", () => showTab(t));
@@ -734,6 +887,7 @@ async function boot(){
   const dd = Math.round((EXAM - today) / 86400000);
   $("dday").append(h("span", { text: "12월 6일(일) 시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
 
+  await loadIndex();
   try {
     await loadAll();
     /* 이전 버전(한 파일짜리)에서 localStorage에 쌓인 오답노트 옮기기 */

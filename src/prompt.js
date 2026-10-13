@@ -37,12 +37,13 @@ ${weak.length ? `[학습자 약점 ${isVocab ? "어휘" : "문법"}] 자연스�
   - pattern: 이 문제의 출제 패턴(질문 유형, 정답 근거가 보통 어디에 있는지) 1~2문장.
   - tip: 실전 풀이 요령 1~3문장.
   - choiceNotes: choices와 같은 순서로 정확히 4개. 각 선택지가 왜 정답이거나 오답인지 한 문장.
+  - (ex 밖, 문항에) patternTags: 이 문항이 묻는 핵심 문법 형태나 어휘 1~3개. 예: ["〜にすぎない"], ["手分け"]. 통계용이라 표기를 일정하게.
   - compare: 헷갈리기 쉬운 비슷한 말 비교 ${isVocab ? "2~4개 (필수)" : "0~3개 (필요할 때만, 없으면 빈 배열)"}. {word: 표기, reading: 히라가나, meaning: 한국어 뜻, note: 차이점과 대표 쓰임 한 문장}
 ${isVocab ? "  - 문자·어휘 유형에서 grammar는 관련 관용 표현·연어(예: 「手分けして探す」)를 넣고, 없으면 빈 배열.\n" : ""}
 - answer는 0부터 시작하는 정답 선택지 인덱스.
 
 [출력] 다른 말 없이 JSON 하나만:
-{"title":"일본어로 된 짧은 세트 제목","topic":"${topic}","passage":"지문(문법 유형은 빈 문자열)","questions":[{"stem":"문제 문장","choices":["","","",""],"answer":0,"ex":{"why":"","kanji":[{"word":"","reading":"","meaning":""}],"grammar":[{"pattern":"","meaning":"","example":""}],"pattern":"","tip":"","choiceNotes":["","","",""],"compare":[{"word":"","reading":"","meaning":"","note":""}]}}]}`;
+{"title":"일본어로 된 짧은 세트 제목","topic":"${topic}","passage":"지문(문법 유형은 빈 문자열)","questions":[{"stem":"문제 문장","choices":["","","",""],"answer":0,"patternTags":[""],"ex":{"why":"","kanji":[{"word":"","reading":"","meaning":""}],"grammar":[{"pattern":"","meaning":"","example":""}],"pattern":"","tip":"","choiceNotes":["","","",""],"compare":[{"word":"","reading":"","meaning":"","note":""}]}}]}`;
 }
 
 /* 면접 답변을 보고 예상 꼬리 질문 5개. 출력은 sets.js의 normalizeFollowups와 맞춘다. */
