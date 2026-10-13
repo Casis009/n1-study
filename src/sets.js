@@ -4,6 +4,9 @@ import { KINDS } from "./kinds.js";
 const asStr = x => typeof x === "string" ? x : (x == null ? "" : String(x));
 const arr = v => Array.isArray(v) ? v : [];
 
+/* 단어 탭 gloss: [{ w: 문장에 나온 그대로의 표기, r: 히라가나, m: 한국어 뜻 }] */
+export const normalizeGloss = v => arr(v).filter(g => g && g.w).map(g => ({ w: asStr(g.w), r: asStr(g.r), m: asStr(g.m) })).slice(0, 60);
+
 function shuffleIdx(n){
   const a = [...Array(n).keys()];
   for (let i = n - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
@@ -21,11 +24,17 @@ export function normalizeQ(q, oneBased){
   const ex = q.ex || q.explanation || {};
   const notes = arr(ex.choiceNotes).map(asStr);
   while (notes.length < 4) notes.push("");
+  const cko = arr(ex.choicesKo).slice(0, 4).map(c => ({ reading: asStr(c?.reading), ko: asStr(c?.ko) }));
+  while (cko.length < 4) cko.push({ reading: "", ko: "" });
+  const tr = ex.translation || {};
   const tags = arr(q.patternTags).map(asStr).map(t => t.trim()).filter(Boolean).slice(0, 6);
   return {
     stem: asStr(q.stem), choices, answer: ans, patternTags: tags,
     ...(typeof q.unitId === "string" ? { unitId: q.unitId } : {}),
+    gloss: normalizeGloss(q.gloss),
     ex: {
+      translation: { full: asStr(tr.full), ko: asStr(tr.ko) },
+      choicesKo: cko,
       why: asStr(ex.why),
       kanji: arr(ex.kanji).filter(k => k && k.word).map(k => ({ word: asStr(k.word), reading: asStr(k.reading), meaning: asStr(k.meaning) })).slice(0, 10),
       grammar: arr(ex.grammar).filter(g => g && g.pattern).map(g => ({ pattern: asStr(g.pattern), meaning: asStr(g.meaning), example: asStr(g.example) })).slice(0, 5),
@@ -46,6 +55,7 @@ export function prepSet(raw, { shuffle = false, fallbackKind = "grammar_blank" }
       const p = shuffleIdx(4);
       q.choices = p.map(i => q.choices[i]);
       q.ex.choiceNotes = p.map(i => q.ex.choiceNotes[i]);
+      q.ex.choicesKo = p.map(i => q.ex.choicesKo[i]);
       q.answer = p.indexOf(q.answer);
     }
   }
@@ -55,6 +65,7 @@ export function prepSet(raw, { shuffle = false, fallbackKind = "grammar_blank" }
     sample: !!raw.sample, kind,
     title: asStr(raw.title) || KINDS[kind].label,
     topic: asStr(raw.topic), passage: asStr(raw.passage), engine: asStr(raw.engine),
+    passageKo: asStr(raw.passageKo), passageGloss: normalizeGloss(raw.passageGloss),
     questions, startedAt: Date.now(), elapsed: 0, done: false, logged: false
   };
 }

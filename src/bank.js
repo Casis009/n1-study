@@ -80,7 +80,7 @@ export function buildSet(kind, units){
     raw = { kind, title: `${k.label} ${qs.length}문항`, topic: "", passage: "", questions: qs };
   } else {
     const u = units[0];
-    raw = { kind, title: u.title, topic: u.topic, passage: u.passage, questions: u.questions.map(q => ({ ...q, unitId: u.id })) };
+    raw = { kind, title: u.title, topic: u.topic, passage: u.passage, passageKo: u.passageKo, passageGloss: u.passageGloss, questions: u.questions.map(q => ({ ...q, unitId: u.id })) };
   }
   const set = prepSet(structuredClone(raw), { shuffle: true, fallbackKind: kind });
   set.bank = true; set.recorded = {}; set.snap = {};
@@ -170,8 +170,8 @@ export function tagList({ group = null } = {}){
 /* 기기 은행: AI 문제·내 문제 추가 */
 const newId = p => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 export function splitUnits(kind, raw){
-  const base = { title: raw.title || "", topic: raw.topic || "", passage: raw.passage || "" };
-  return isUnitKind(kind) ? (raw.questions || []).map(q => ({ ...base, passage: "", questions: [q] })) : [{ ...base, questions: raw.questions || [] }];
+  const base = { title: raw.title || "", topic: raw.topic || "", passage: raw.passage || "", passageKo: raw.passageKo || "", passageGloss: raw.passageGloss || [] };
+  return isUnitKind(kind) ? (raw.questions || []).map(q => ({ ...base, passage: "", passageKo: "", passageGloss: [], questions: [q] })) : [{ ...base, questions: raw.questions || [] }];
 }
 export async function addLocalUnits(kind, units, source){
   const rows = units.map(u => ({ id: newId(source), kind, source, at: Date.now(), unit: u }));

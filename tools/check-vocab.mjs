@@ -11,6 +11,7 @@ const hangul = s => /[가-힣]/.test(s || "");
 const hira = s => /^[ぁ-ゖー]+$/.test(s || "");
 const kana = s => /^[ぁ-ゖァ-ヺー]+$/.test(s || "");
 const errors = [], warns = [], ids = new Set();
+const NEW_FIELDS_STRICT = false;   // 예문 gloss: 기존 데이터 보완이 끝나면 true로 바꿔 누락을 오류로
 const index = { generated: new Date().toISOString().slice(0, 10), kinds: {} };
 const keys = { grammar: new Set(), kanji: new Set(), words: new Set() };
 
@@ -32,6 +33,7 @@ for (const kind of Object.keys(VKINDS)){
   if (data.kind !== kind) err(`kind 필드가 ${data.kind}`);
   const items = Array.isArray(data.items) ? data.items : [];
   const seen = new Map();
+  let noGloss = 0;
   for (const it of items){
     const at = it.id || "(id 없음)";
     if (!it.id || !it.id.startsWith(PREFIX[kind])) err(`${at} id 접두사는 ${PREFIX[kind]}`);
@@ -63,9 +65,19 @@ for (const kind of Object.keys(VKINDS)){
       if (!Array.isArray(it.synonyms)) err(`${at} synonyms 배열 없음`);
       if (!it.usage) err(`${at} usage(연어) 없음`);
     }
+    if (!Array.isArray(it.gloss) || !it.gloss.length) noGloss++;
+    else {
+      const segs = (it.example || "").split(/★|__|\n/), w = new Set();
+      for (const g of it.gloss){
+        if (!g || !g.w || !segs.some(t => t.includes(g.w))) err(`${at} gloss「${g?.w}」가 예문에 없음`);
+        else if (!/^[ぁ-ゖァ-ヺー・]+$/.test(g.r || "") || !hangul(g.m)) err(`${at} gloss「${g.w}」 읽기/뜻 누락`);
+        if (g?.w && w.has(g.w)) err(`${at} gloss「${g.w}」 중복`); else if (g?.w) w.add(g.w);
+      }
+    }
     const head = kind === "grammar" ? it.pattern : it.word;
     if (head && it.example && !it.example.includes(stemOf(head))) warn(`${at} 예문에 표제어(${stemOf(head)})가 안 보임`);
   }
+  if (noGloss) (NEW_FIELDS_STRICT ? err : warn)(`새 필드 예문 gloss 누락 ${noGloss}개`);
   if (items.length) index.kinds[kind] = { file, count: items.length };
   console.log(`${kind.padEnd(8)} ${String(items.length).padStart(4)}개  ` +
     VKINDS[kind].groups.map(g => `${g} ${items.filter(i => (kind === "words" ? i.part : i.group) === g).length}`).join(" · "));

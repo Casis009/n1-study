@@ -49,8 +49,8 @@ const fmtWhen = ts => {
 /* 모델 출력·내 문제를 검증하고 문제은행 단위로 나눈다(풀이용 필드는 뺀다). 형식이 틀리면 throw. */
 function cleanUnits(kind, raw){
   const set = prepSet(structuredClone({ ...raw, kind }), { fallbackKind: kind });
-  const questions = set.questions.map(({ stem, choices, answer, patternTags, ex }) => ({ stem, choices, answer, patternTags, ex }));
-  return splitUnits(kind, { title: set.title, topic: set.topic, passage: set.passage, questions });
+  const questions = set.questions.map(({ stem, choices, answer, patternTags, gloss, ex }) => ({ stem, choices, answer, patternTags, gloss, ex }));
+  return splitUnits(kind, { title: set.title, topic: set.topic, passage: set.passage, passageKo: set.passageKo, passageGloss: set.passageGloss, questions });
 }
 
 /* ---------- notes / cards / history ---------- */
@@ -58,7 +58,8 @@ async function addNote(set, q){
   if (q.saved) return;
   q.saved = true;
   const note = { id: set.id + "-" + set.questions.indexOf(q), at: Date.now(), kind: set.kind, title: set.title, passage: set.passage,
-    q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [] } };
+    passageKo: set.passageKo || "", passageGloss: set.passageGloss || [],
+    q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [], gloss: q.gloss || [] } };
   notes = [note, ...notes.filter(n => n.id !== note.id)];
   await db.put("notes", note); ensurePersist();
   const undone = await undoDoneFor(questionKeys(q)).catch(() => 0);   // 외웠다고 체크한 항목을 다시 틀리면 되돌림
@@ -129,27 +130,96 @@ async function startBank(force = false){
 }
 
 /* ---------- shared rendering ---------- */
-function stemNode(s){
+/* ---------- 단어 탭(gloss): 문장 속 단어에 점선 밑줄, 탭하면 작은 팝업 ---------- */
+/* text를 노드 배열로. gl = { list, used, source }이면 list의 단어(긴 것 우선)를 처음 나올 때 한 번만 버튼으로 감싼다. */
+function glossNodes(text, gl){
+  if (!gl) return [text];
+  const out = [];
+  let buf = "";
+  for (let i = 0; i < text.length;){
+    const g = gl.list.find(x => !gl.used.has(x.w) && text.startsWith(x.w, i));
+    if (!g){ buf += text[i++]; continue; }
+    if (buf){ out.push(buf); buf = ""; }
+    gl.used.add(g.w);
+    out.push(h("button", { class: "gl", type: "button", lang: "ja", text: g.w, onclick: e => { e.stopPropagation(); openGloss(e.currentTarget, g, gl.source); } }));
+    i += g.w.length;
+  }
+  if (buf) out.push(buf);
+  return out;
+}
+const glossOf = (list, on, source) => on && list?.length ? { list: [...list].sort((a, b) => b.w.length - a.w.length), used: new Set(), source } : null;
+let glossPop = null;
+function closeGloss(){ glossPop?.remove(); glossPop = null; }
+document.addEventListener("click", e => { if (glossPop && !glossPop.contains(e.target)) closeGloss(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeGloss(); });
+window.addEventListener("resize", closeGloss);
+async function findVocab(word){
+  for (const kind of ["kanji", "words", "grammar"]){
+    if (!vocabCount(kind)) continue;
+    try { if ((await loadVocab(kind)).some(it => vocabKey(kind, it) === word)) return kind; } catch {}
+  }
+  return null;
+}
+function openGloss(target, g, source){
+  closeGloss();
+  const item = { word: g.w, reading: g.r, meaning: g.m }, id = cardId("kanji", g.w);
+  const star = h("button", { class: "btn small", type: "button" });
+  const paint = () => { const on = cardIds.has(id); star.textContent = on ? "★ 내 단어장에 있음" : "☆ 내 단어장"; star.setAttribute("aria-pressed", String(on)); };
+  star.addEventListener("click", async () => { await toggleCard("kanji", item, source || ""); paint(); });
+  paint();
+  const acts = h("div", { class: "gp-act" }, star);
+  const pop = h("div", { class: "gloss-pop", role: "dialog", "aria-label": g.w },
+    h("div", { class: "gp-top" }, h("b", { lang: "ja", text: g.w }), g.r && g.r !== g.w ? h("span", { class: "r", lang: "ja", text: g.r }) : null,
+      h("button", { class: "gp-x", type: "button", "aria-label": "닫기", onclick: closeGloss }, "×")),
+    h("div", { class: "m", text: g.m }), acts);
+  document.body.append(pop);
+  glossPop = pop;
+  const r = target.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  const left = Math.min(Math.max(8, r.left), vw - pw - 8);
+  const top = r.bottom + ph + 8 > vh && r.top > ph + 8 ? r.top - ph - 6 : r.bottom + 6;
+  pop.style.left = left + window.scrollX + "px";
+  pop.style.top = top + window.scrollY + "px";
+  findVocab(g.w).then(kind => {
+    if (!kind || glossPop !== pop) return;
+    acts.append(h("button", { class: "btn small ghost", type: "button", onclick: () => {
+      closeGloss();
+      Object.assign(vb, { mode: "base", kind, group: "all", view: "all", q: g.w }); vLimit = 50; saveVb(); showTab("cards");
+    } }, "단어장에서 보기"));
+  });
+}
+
+function stemNode(s, gl){
   const wrap = h("div", { class: "jp", lang: "ja" });
   for (const p of s.split(/(★|__[^_]+__)/)){
     if (p === "★") wrap.append(h("span", { class: "star", text: "★" }));
-    else if (/^__[^_]+__$/.test(p)) wrap.append(h("u", { text: p.slice(2, -2) }));
-    else if (p) wrap.append(p);
+    else if (/^__[^_]+__$/.test(p)) wrap.append(h("u", null, glossNodes(p.slice(2, -2), gl)));
+    else if (p) wrap.append(...glossNodes(p, gl));
   }
   return wrap;
 }
-function passageNode(text, kind){
+function passageNode(text, kind, gl){
   const box = h("div", { class: "passage" + (kind === "info_search" ? " plain" : ""), lang: "ja" });
   for (const para of text.split(/\n+/).map(t => t.trim()).filter(Boolean)){
     const isAB = /^[AB]$/.test(para);
     const p = h("p", { class: isAB ? "mark-ab" : null });
     for (const seg of para.split(/(__[^_]+__)/)){
-      if (/^__[^_]+__$/.test(seg)) p.append(h("u", { text: seg.slice(2, -2) }));
-      else if (seg) p.append(seg);
+      if (/^__[^_]+__$/.test(seg)) p.append(h("u", null, glossNodes(seg.slice(2, -2), gl)));
+      else if (seg) p.append(...glossNodes(seg, gl));
     }
     box.append(p);
   }
   return box;
+}
+/* 지문 + (풀이가 끝났으면) 단어 탭과 접어 둔 지문 해석 */
+function passageBlock(o, kind, on, source){
+  const out = [passageNode(o.passage, kind, glossOf(o.passageGloss, on, source))];
+  if (on && o.passageKo?.trim()){
+    const d = h("details", { class: "passage-ko" }, h("summary", { text: "지문 해석 보기" }));
+    for (const para of o.passageKo.split(/\n+/).map(t => t.trim()).filter(Boolean)) d.append(h("p", { text: para }));
+    out.push(d);
+  }
+  return out;
 }
 function starBtn(type, item, source){
   const front = type === "grammar" ? item.pattern : item.word;
@@ -168,7 +238,13 @@ function starBtn(type, item, source){
 function explanationNode(q, source){
   const ex = q.ex, box = h("div", { class: "ex" });
   if (q.patternTags?.length) box.append(h("div", { class: "ptags" }, h("span", { class: "hint", text: "패턴" }), q.patternTags.map(t => h("span", { class: "tag", lang: "ja", text: t }))));
+  const tr = ex.translation || {};
+  if (tr.full || tr.ko) box.append(h("section", null, h("h4", { text: "문제 해석" }),
+    tr.full ? h("p", { class: "tr-jp", lang: "ja", text: tr.full }) : null, tr.ko ? h("p", { text: tr.ko }) : null));
   if (ex.why) box.append(h("section", null, h("h4", { text: "정답 근거" }), h("p", { text: ex.why })));
+  if (ex.choicesKo?.some(c => c.ko)) box.append(h("section", null, h("h4", { text: "선택지 해석" }),
+    h("ul", { class: "notes cko" }, ex.choicesKo.map((c, i) => h("li", { class: i === q.answer ? "isans" : null }, h("span", { class: "n", text: NUM[i] }),
+      h("span", null, c.reading ? h("span", { class: "r", lang: "ja", text: c.reading }) : null, h("span", { text: c.ko })))))));
   if (ex.kanji.length) box.append(h("section", null, h("h4", { text: "한자 · 읽기" }),
     h("div", { class: "kanji" }, ex.kanji.map(k => h("div", { class: "kj" },
       h("span", { class: "w", lang: "ja", text: k.word }),
@@ -191,7 +267,8 @@ function explanationNode(q, source){
 }
 function questionNode(q, idx, ctx){
   const wrap = h("article", { class: "q" });
-  wrap.append(h("div", { class: "q-stem" }, h("span", { class: "q-no", text: ctx.label || `問${idx + 1}` }), stemNode(q.stem)));
+  const gl = glossOf(q.gloss, q.checked, ctx.source);   // 단어 탭은 정답 확인 뒤에만 (풀 때 힌트가 되지 않게)
+  wrap.append(h("div", { class: "q-stem" }, h("span", { class: "q-no", text: ctx.label || `問${idx + 1}` }), stemNode(q.stem, gl)));
   const list = h("ol", { class: "choices" });
   q.choices.forEach((c, i) => {
     let cls = "choice", verdict = null;
@@ -199,8 +276,10 @@ function questionNode(q, idx, ctx){
       if (i === q.answer){ cls += " right"; verdict = h("span", { class: "verdict ok", text: "정답" }); }
       else if (i === q.sel){ cls += " wrongpick"; verdict = h("span", { class: "verdict ng", text: "내 답" }); }
     }
-    list.append(h("li", null, h("button", { class: cls, "aria-pressed": String(q.sel === i), disabled: q.checked, onclick: () => { q.sel = i; ctx.onChange(); } },
-      h("span", { class: "bubble", text: String(i + 1) }), h("span", { class: "jp", lang: "ja", text: c }), verdict)));
+    const inner = [h("span", { class: "bubble", text: String(i + 1) }), h("span", { class: "jp", lang: "ja" }, glossNodes(c, gl)), verdict];
+    list.append(h("li", null, q.checked   // 확인 뒤에는 단어 탭 버튼을 넣을 수 있게 div로
+      ? h("div", { class: cls + " done", "aria-pressed": String(q.sel === i) }, inner)
+      : h("button", { class: cls, "aria-pressed": String(q.sel === i), onclick: () => { q.sel = i; ctx.onChange(); } }, inner)));
   });
   wrap.append(list);
   const actions = h("div", { class: "q-actions" });
@@ -298,7 +377,7 @@ function renderSolve(){
       h("span", { class: "tag", lang: "ja", text: KINDS[s.kind]?.jp || "" }),
       s.topic && !s.sample ? h("span", { class: "tag", text: s.topic }) : null,
       h("span", null, "⏱ ", timer))));
-  if (s.passage.trim()) sec.append(passageNode(s.passage, s.kind));
+  if (s.passage.trim()) sec.append(...passageBlock(s, s.kind, s.done, s.title));
   const qs = h("div", { class: "qs" });
   s.questions.forEach((q, i) => qs.append(questionNode(q, i, {
     source: s.title,
@@ -361,8 +440,8 @@ function renderNote(){
       h("div", { class: "meta" }, h("span", { class: "tag", lang: "ja", text: KINDS[n.kind]?.jp || "" }), h("span", { text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { lang: "ja", text: n.title })),
       h("div", { class: "stemline", lang: "ja", text: n.q.stem.replace(/__/g, "") })));
     const body = h("div", { class: "note-body" });
-    if (n.passage && n.passage.trim()) body.append(passageNode(n.passage, n.kind));
-    const r = noteRetry.get(n.id) || { stem: n.q.stem, choices: n.q.choices, answer: n.q.answer, ex: n.q.ex, sel: n.q.mySel, checked: true };
+    if (n.passage && n.passage.trim()) body.append(...passageBlock(n, n.kind, true, n.title));
+    const r = noteRetry.get(n.id) || { stem: n.q.stem, choices: n.q.choices, answer: n.q.answer, ex: n.q.ex, gloss: n.q.gloss || [], sel: n.q.mySel, checked: true };
     body.append(questionNode(r, 0, { label: "復習", source: n.title, onChange: () => { noteRetry.set(n.id, r); renderNote(); },
       extraActions: [
         h("button", { class: "btn small", onclick: () => { noteRetry.set(n.id, { ...r, sel: null, checked: false }); renderNote(); } }, "다시 풀기"),
@@ -483,7 +562,7 @@ function vocabCard(kind, it, wrongN){
     if (it.usage) body.append(h("div", { class: "src" }, h("b", { text: "연어 " }), h("span", { lang: "ja", text: it.usage })));
     if (it.synonyms?.length) body.append(h("div", { class: "src" }, h("b", { text: "유의어 " }), h("span", { lang: "ja", text: it.synonyms.join("・") })));
   }
-  body.append(h("div", { class: "extra", lang: "ja", text: it.example }), h("div", { class: "src", text: it.exampleKo }));
+  body.append(h("div", { class: "extra", lang: "ja" }, glossNodes(it.example, glossOf(it.gloss, true, "기본 단어장"))), h("div", { class: "src", text: it.exampleKo }));
   if (kind === "grammar" && it.similar?.length) body.append(h("div", { class: "similar" }, it.similar.map(s =>
     h("div", null, h("b", { lang: "ja", text: s.pattern }), h("span", { text: " — " + s.diff })))));
   if (kind === "grammar"){

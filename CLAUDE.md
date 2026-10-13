@@ -53,8 +53,10 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 
 ```json
 { "title": "", "topic": "", "passage": "",
-  "questions": [{ "stem": "", "choices": ["","","",""], "answer": 0,
-    "ex": { "why": "", "kanji": [{"word":"","reading":"","meaning":""}],
+  "passageKo": "", "passageGloss": [{"w":"","r":"","m":""}],
+  "questions": [{ "stem": "", "choices": ["","","",""], "answer": 0, "gloss": [{"w":"","r":"","m":""}],
+    "ex": { "translation": {"full":"","ko":""}, "choicesKo": [{"reading":"","ko":""}],
+            "why": "", "kanji": [{"word":"","reading":"","meaning":""}],
             "grammar": [{"pattern":"","meaning":"","example":""}],
             "compare": [{"word":"","reading":"","meaning":"","note":""}],
             "pattern": "", "tip": "", "choiceNotes": ["","","",""] } }] }
@@ -64,7 +66,8 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 - 문제은행 파일은 `{ kind, units: [{ id, title, topic, passage, questions }] }`. 문항형 유형은 단위 하나에 문제 1개, 지문형은 지문 1개 + 딸린 문항.
 - 밑줄은 `__문구__`로 표기 (지문·문제 모두). ★는 문장 배열 문제의 정답 칸.
 - `answer`는 0부터. 1부터 온 경우 sets.js가 보정한다.
-- 선택지는 클라이언트에서 섞고 `choiceNotes`도 같은 순서로 섞는다. 그래서 해설에서 선택지를 번호로 부르지 않게 프롬프트에 지시해 둠.
+- 새 해설 필드(translation·choicesKo·gloss·passageKo·passageGloss)의 작성 규칙은 docs/bank-plan.md "작성 규칙". 단어 탭(gloss)과 지문 해석은 정답 확인 뒤에만 보인다.
+- 선택지는 클라이언트에서 섞고 `choiceNotes`·`choicesKo`도 같은 순서로 섞는다. 그래서 해설에서 선택지를 번호로 부르지 않게 프롬프트에 지시해 둠.
 - 프롬프트를 바꾸면 normalizeQ와 explanationNode(main.js)도 같이 맞출 것.
 
 ## 규칙

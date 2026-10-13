@@ -12,6 +12,24 @@ const EXPECT_Q = { text_grammar: 5, reading_short: 2, reading_mid: 3, reading_lo
 const LEN = { reading_short: [200, 350], reading_mid: [450, 700], reading_long: [800, 1100], integrated: [450, 700], info_search: [500, 900], text_grammar: [550, 800] };
 
 const errors = [], warns = [], ids = new Set(), stems = new Map(), tagCount = new Map();
+// 새 해설 필드(translation·choicesKo·gloss·passageKo·passageGloss): 기존 데이터 보완이 끝나면 true로 바꿔 누락을 오류로
+const NEW_FIELDS_STRICT = false;
+// choicesKo.reading은 20자 이하 선택지(단어·구)에 한자가 있을 때 필수. 문장 선택지는 ""이고 그 속 단어는 gloss로
+const hasKanji = s => /[一-龯々]/.test(s || "");
+const kanaOnly = s => /^[ぁ-ゖァ-ヺー・、。]+$/.test(s || "");
+const pieces = s => s.split(/★|__|\n/);                       // 화면에서 단어 탭이 나뉘는 경계
+const BLANK_KINDS = ["grammar_blank", "context", "text_grammar", "grammar_order"];
+/* gloss 검사: w가 문장 조각 안에 그대로 있는지, r·m 형식 */
+function checkGloss(list, texts, at, err){
+  const segs = texts.flatMap(pieces);
+  const seen = new Set();
+  for (const g of list){
+    if (!segs.some(t => t.includes(g.w))) err(`${at} gloss「${g.w}」가 문장에 없음`);
+    if (!kanaOnly(g.r)) err(`${at} gloss「${g.w}」 읽기가 가나가 아님: ${g.r}`);
+    if (!hangul(g.m)) err(`${at} gloss「${g.w}」 뜻(한국어) 누락`);
+    if (seen.has(g.w)) err(`${at} gloss「${g.w}」 중복`); else seen.add(g.w);
+  }
+}
 const index = { generated: new Date().toISOString().slice(0, 10), kinds: {} };
 
 for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "index.json").sort()){
@@ -24,6 +42,8 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
   const units = Array.isArray(data.units) ? data.units : [];
   const k = KINDS[kind];
   let qn = 0;
+  const missing = new Map();   // 새 필드 누락 개수
+  const miss = name => missing.set(name, (missing.get(name) || 0) + 1);
   for (const u of units){
     const at = `${u.id || "(id 없음)"}`;
     if (!u.id || typeof u.id !== "string") err(`${at} id 없음`);
@@ -41,6 +61,10 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
     if (kind === "text_grammar") for (const n of "１２３４５") if (!p.includes(`（${n}）`)) err(`${at} 지문에 （${n}） 없음`);
     if (kind === "info_search" && /\|.*\||^#|\*\*/m.test(p)) err(`${at} 지문에 표/마크다운`);
     if (kind === "integrated" && !(/^A\s*$/m.test(p) && /^B\s*$/m.test(p))) err(`${at} A/B 구분 줄 없음`);
+    if (p.trim()){
+      if (!u.passageKo) miss("passageKo"); else if (!hangul(u.passageKo)) err(`${at} passageKo가 한국어가 아님`);
+      if (!set.passageGloss.length) miss("passageGloss"); else checkGloss(set.passageGloss, [p], `${at} 지문`, err);
+    }
     set.questions.forEach((q, i) => {
       qn++;
       const t = `${at} Q${i + 1}`, ex = q.ex;
@@ -69,9 +93,25 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
       if (!hangul(ex.pattern)) err(`${t} pattern 없음`);
       if (!hangul(ex.tip)) err(`${t} tip 없음`);
       if (!ex.choiceNotes.every(hangul)) err(`${t} choiceNotes 누락`);
+      const tr = ex.translation;
+      if (!tr.full && !tr.ko) miss("translation");
+      else {
+        if (!tr.full.trim() || !hangul(tr.ko)) err(`${t} translation full/ko 누락`);
+        if (BLANK_KINDS.includes(kind) && !tr.full.includes(q.choices[q.answer])) err(`${t} translation.full에 정답「${q.choices[q.answer]}」이 없음`);
+      }
+      if (!ex.choicesKo.some(c => c.ko || c.reading)) miss("choicesKo");
+      else ex.choicesKo.forEach((c, j) => {
+        if (!hangul(c.ko)) err(`${t} choicesKo[${j}] 한국어 뜻 누락`);
+        if (hasKanji(q.choices[j]) && q.choices[j].length <= 20 ? !kanaOnly(c.reading) : c.reading && !kanaOnly(c.reading)) err(`${t} choicesKo[${j}] 읽기 누락/가나 아님 (${q.choices[j]})`);
+      });
+      if (!q.gloss.length) miss("gloss"); else {
+        checkGloss(q.gloss, [q.stem, ...q.choices], t, err);
+        if (q.gloss.length > 12) warn(`${t} gloss ${q.gloss.length}개 (문장당 3~8개 기준)`);
+      }
       if ([ex.why, ...ex.choiceNotes].some(n => /[①②③④]|[1-4]번|선택지 ?[1-4]/.test(n))) err(`${t} 해설이 선택지를 번호로 지칭(선택지는 섞임)`);
     });
   }
+  for (const [name, n] of missing) (NEW_FIELDS_STRICT ? err : warn)(`새 필드 ${name} 누락 ${n}곳`);
   const tags = {};
   for (const u of units) for (const q of u.questions || []) for (const t of q.patternTags || []){ (tags[t] ||= []); if (!tags[t].includes(u.id)) tags[t].push(u.id); }
   if (units.length) index.kinds[kind] = { file, units: units.length, questions: qn, ids: units.map(u => u.id), tags };
