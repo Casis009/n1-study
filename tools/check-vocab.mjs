@@ -18,7 +18,9 @@ const keys = { grammar: new Set(), kanji: new Set(), words: new Set() };
 function stemOf(s){
   const t = s.replace(/^〜/, "").replace(/[（(].*?[）)]/g, "").split(/[・／/]/)[0].replace(/〜.*$/, "");
   const m = t.match(/^[一-龯々ァ-ヺー]+/);           // 한자·가타카나 부분이 있으면 그것
-  return m ? m[0] : t.slice(0, 2);                  // 가나뿐이면 활용을 고려해 앞 2글자만
+  if (m) return m[0];
+  const k = t.slice(0, 2);                           // 가나뿐이면 활용을 고려해 앞 2글자만
+  return k.length === 2 && t.length === 2 && /[うくぐすつぬぶむる]$/.test(k) ? k[0] : k;   // めく→め(めいた)
 }
 
 for (const kind of Object.keys(VKINDS)){
