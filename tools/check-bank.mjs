@@ -52,7 +52,7 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
       for (const tag of q.patternTags) tagCount.set(tag, (tagCount.get(tag) || 0) + 1);
       if (kind === "grammar_order"){
         if ((q.stem.match(/★/g) || []).length !== 1) err(`${t} ★가 1개가 아님`);
-        if (((q.stem.match(/＿+/g) || []).length) !== 4) err(`${t} 빈칸 4개 형식 아님`);
+        if (((q.stem.match(/[＿★]*＿[＿★]*/g) || []).length) !== 4) err(`${t} 빈칸 4개 형식 아님`);   // ＿★＿도 한 칸
       }
       if (kind === "usage" && !/^「.+」$/.test(q.stem)) err(`${t} stem이 「단어」 형식 아님`);
       if ((kind === "kanji_reading" || kind === "paraphrase") && !/__[^_]+__/.test(q.stem)) err(`${t} 밑줄 없음`);
