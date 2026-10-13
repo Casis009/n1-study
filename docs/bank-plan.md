@@ -21,7 +21,7 @@ Gemini는 보조("AI로 새 문제")이고, 성공한 결과는 기기 안 문�
 | 8 | 기본 단어장 어휘 800개 (200개씩) | 대기 |
 | 9 | 2단계 言い換え類義 60문항, 用法 60문항 (단어장 한자·어휘와 같은 표기로 연결) | 대기 |
 
-**다음 시작 지점:** 5a번 — 統合理解 ri-0001부터 보완 (`node --no-warnings tools/fill-gloss.mjs integrated` 먼저 실행 후 passageKo·translation·choicesKo·부족한 gloss 직접 작성). 남은 순서 統合理解 → 情報検索 → 문법 단어장.
+**다음 시작 지점:** 5a번 — 情報検索 is-0001부터 보완 (`node --no-warnings tools/fill-gloss.mjs info_search` 먼저 실행 후 passageKo·translation·choicesKo·부족한 gloss 직접 작성). 남은 순서 情報検索 → 문법 단어장.
 
 ## 기본 단어장 (data/vocab)
 
@@ -105,7 +105,7 @@ Gemini는 보조("AI로 새 문제")이고, 성공한 결과는 기기 안 문�
 | 内容理解（短文） | rs-0001~0020 | 완료 |
 | 内容理解（中文） | rm-0001~0015 | 완료 |
 | 主張理解（長文） | rl-0001~0010 | 완료 |
-| 統合理解 | ri-0001~0010 | 대기 |
+| 統合理解 | ri-0001~0010 | 완료 |
 | 情報検索 | is-0001~0010 | 대기 |
 | 문법 단어장 예문 gloss | g-0001~0200 | 대기 |
 
