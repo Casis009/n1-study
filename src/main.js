@@ -28,7 +28,7 @@ if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
 let current = null;
 let notes = [], cards = [], history = [], answers = [];
 const cardIds = new Set();
-let busy = null, lastError = "", bankMsg = "", toastTimer = null, aiOpen = false;
+let busy = null, lastError = "", toastTimer = null;
 let persist = "unsupported";
 
 const savePrefs = () => { prefs.set("n1.settings", settings); prefs.set("n1.gen", gen); };
@@ -100,7 +100,7 @@ async function generate(){
   const ctl = new AbortController();
   busy = { ctl, started: Date.now() };
   lastError = "";
-  renderSolve();
+  renderAI();
   busy.timer = setInterval(() => { const s = $("busy-sec"); if (s) s.textContent = Math.round((Date.now() - busy.started) / 1000) + "초"; }, 1000);
   try {
     const vocab = !!KINDS[gen.kind].vocab;
@@ -116,20 +116,9 @@ async function generate(){
   } catch (e){
     if (!(e && e.name === "AbortError")) lastError = e?.message || "문제를 만들지 못했어요.";
   } finally {
-    clearInterval(busy.timer); busy = null; renderSolve();
-    if (!lastError) document.querySelector(".set")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    clearInterval(busy.timer); busy = null;
+    if (!lastError && current?.engine === "Gemini" && !current.questions.some(q => q.checked)) go("play"); else renderAI();
   }
-}
-
-async function startBank(force = false){
-  bankMsg = "";
-  try {
-    const set = await pickSet(gen.kind, gen.count, { force });
-    if (set){ current = set; saveCurrent(); }
-    else bankMsg = "이 유형은 문제은행에 아직 문제가 없어요.";
-  } catch (e){ bankMsg = e?.message || "문제은행을 열지 못했어요."; }
-  renderSolve();
-  if (!bankMsg) document.querySelector(".set")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /* ---------- shared rendering ---------- */
@@ -223,7 +212,7 @@ function openGloss(target, g, source){
     if (!kind || glossPop !== pop) return;
     acts.append(h("button", { class: "btn small ghost", type: "button", onclick: () => {
       closeGloss();
-      Object.assign(vb, { mode: "base", kind, group: "all", view: "all", q: g.w }); vLimit = 50; saveVb(); showTab("cards");
+      Object.assign(vb, { mode: "base", kind, group: "all", view: "all", q: g.w }); vLimit = 50; saveVb(); go("cards");
     } }, "단어장에서 보기"));
   });
 }
@@ -499,54 +488,29 @@ function questionNode(q, idx, ctx){
   return wrap;
 }
 
-/* ---------- 문제 풀기 ---------- */
-function renderSolve(){
-  const v = $("view-solve"); v.replaceChildren();
+/* ---------- AI로 새 문제 (더보기) ---------- */
+function renderAI(){
+  const v = $("view-ai"); v.replaceChildren();
+  if (KINDS[gen.kind].listen){ gen.kind = "grammar_blank"; savePrefs(); }
+  const k = KINDS[gen.kind];
   const g = h("section", { class: "panel stack" });
   const kindBox = h("div", { class: "kind-groups" });
-  for (const grp of GROUPS){
-    const chips = h("div", { class: "chips" });
-    for (const [key, k] of Object.entries(KINDS)) if (k.group === grp)
-    { const c = bankCounts(key);
-      chips.append(h("button", { class: "chip", "aria-pressed": String(gen.kind === key), onclick: () => { gen.kind = key; bankMsg = ""; savePrefs(); renderSolve(); } },
-        k.label, h("small", { lang: "ja", text: k.jp }),
-        h("small", { class: "bank-n mono", text: c.total ? `${c.left}/${c.total}${c.due ? " ·복습" + c.due : ""}` : "준비 중" }))); }
-    kindBox.append(h("div", null, h("div", { class: "label", text: grp }), chips));
+  for (const grp of GROUPS.filter(x => x !== "청해")){
+    kindBox.append(h("div", null, h("div", { class: "label", text: grp }), h("div", { class: "chips" },
+      Object.entries(KINDS).filter(([, x]) => x.group === grp).map(([key, x]) =>
+        h("button", { class: "chip", "aria-pressed": String(gen.kind === key), onclick: () => { gen.kind = key; savePrefs(); renderAI(); } }, x.label, h("small", { lang: "ja", text: x.jp }))))));
   }
   g.append(kindBox);
-
-  const k = KINDS[gen.kind];
   if (k.counts){
     if (!k.counts.includes(gen.count)) gen.count = k.counts[0];
-    const cc = h("div", { class: "chips" });
-    k.counts.forEach(n => cc.append(h("button", { class: "chip", "aria-pressed": String(gen.count === n), onclick: () => { gen.count = n; savePrefs(); renderSolve(); } }, `${n}문항`)));
-    g.append(h("div", null, h("div", { class: "label", text: "문항 수" }), cc));
-  } else {
-    g.append(h("div", null, h("div", { class: "label", text: "구성" }), h("div", { class: "hint", text: k.fixed })));
-  }
-  /* 문제은행 */
-  const c = bankCounts(gen.kind);
-  const bankRow = h("div", { class: "row" });
-  bankRow.append(h("button", { class: "btn primary", disabled: !(c.left + c.due) || !!busy, onclick: () => startBank() }, "문제은행에서 풀기"));
-  if (!c.total) bankRow.append(h("span", { class: "hint", text: "이 유형은 문제은행을 준비 중이에요. 아래 AI 생성이나 기록·설정의 '내 문제 추가'를 쓸 수 있어요." }));
-  else {
-    bankRow.append(h("span", { class: "hint", text: `남은 ${c.left} / 전체 ${c.total}${c.unit} · 지금 복습 ${c.due}${c.wait ? ` · 복습 대기 ${c.wait}` : ""}` }));
-    if (!(c.left + c.due)) bankRow.append(h("span", { class: "hint", text: `다 풀었어요${c.nextDue ? ` · 다음 복습 ${fmtWhen(c.nextDue)}` : ""}` }),
-      h("button", { class: "btn small", disabled: !!busy, onclick: () => startBank(true) }, "그래도 풀기"));
-  }
-  g.append(bankRow);
-  if (bankMsg) g.append(h("div", { class: "status err", role: "alert", text: bankMsg }));
-
-  /* AI 생성(보조) */
-  const ai = h("details", { class: "ai-box" });
-  ai.open = aiOpen || !!busy || !!lastError;
-  ai.addEventListener("toggle", () => { aiOpen = ai.open; });
-  ai.append(h("summary", { text: "AI로 새 문제 (Gemini)" }));
+    g.append(h("div", null, h("div", { class: "label", text: "문항 수" }), h("div", { class: "chips" },
+      k.counts.map(n => h("button", { class: "chip", "aria-pressed": String(gen.count === n), onclick: () => { gen.count = n; savePrefs(); renderAI(); } }, `${n}문항`)))));
+  } else g.append(h("div", null, h("div", { class: "label", text: "구성" }), h("div", { class: "hint", text: k.fixed })));
   const topicIn = h("input", { id: "topic", type: "text", placeholder: "비우면 무작위 (예: 경제, 의료, 철학)", value: gen.topic, oninput: e => { gen.topic = e.target.value; savePrefs(); } });
   const weakCount = weakTags(k.vocab, k.vocab ? 8 : 6).length;
   const weakBox = h("input", { id: "weak", type: "checkbox", onchange: e => { gen.weak = e.target.checked; savePrefs(); } });
   weakBox.checked = gen.weak;
-  const aiBody = h("div", { class: "stack" }, h("div", { class: "row" },
+  g.append(h("div", { class: "row" },
     h("label", { class: "field", for: "topic" }, h("span", { class: "label", text: "주제" }), topicIn),
     h("label", { class: "check", for: "weak" }, weakBox, `자주 틀린 ${k.vocab ? "어휘" : "문법"} 반영${weakCount ? ` (${weakCount}개)` : " (아직 없음)"}`)));
   const actions = h("div", { class: "row" });
@@ -555,21 +519,94 @@ function renderSolve(){
       h("span", null, "Gemini가 문제와 해설을 쓰는 중 · ", h("span", { id: "busy-sec", class: "mono", text: Math.round((Date.now() - busy.started) / 1000) + "초" })),
       h("button", { class: "btn small", onclick: () => busy?.ctl.abort() }, "중지")));
   } else {
-    actions.append(h("button", { class: "btn", onclick: generate }, "AI로 새 문제 만들기"));
+    actions.append(h("button", { class: "btn primary", onclick: generate }, "AI로 새 문제 만들기"));
     actions.append(h("span", { class: "hint", text: `오늘 ${callsToday()}회 호출 · 무료 한도 초기화 ${resetTimeKST()}` }));
-    if (!settings.key.trim()) actions.append(h("button", { class: "btn small ghost", onclick: () => showTab("set") }, "API 키 입력하기"));
+    if (!settings.key.trim()) actions.append(h("a", { class: "btn small ghost", href: "#/set" }, "API 키 입력하기"));
   }
-  aiBody.append(actions, h("p", { class: "hint", text: "만든 문제는 이 기기의 문제은행에도 추가돼서 나중에 복습으로 다시 나와요." }));
-  if (lastError) aiBody.append(h("div", { class: "status err", role: "alert", text: lastError }));
-  ai.append(aiBody);
-  if (k.listen) g.append(h("p", { class: "hint", text: "청해는 문제은행으로만 연습해요(AI 생성 없음). 음성은 이 기기의 읽어주기(일본어 음성)를 써요." }));
-  else g.append(ai);
-  g.append(h("div", { class: "hint" }, "예시 세트: ",
-    ...[["vocab", "어휘 2문항"], ["grammar", "문법 3문항"], ["reading", "독해 단문"]].map(([key, label]) =>
-      h("button", { class: "btn small ghost", onclick: () => { current = prepSet(structuredClone(SAMPLES[key])); saveCurrent(); renderSolve(); } }, label))));
-  v.append(g);
+  g.append(actions, h("p", { class: "hint", text: "만든 문제는 이 기기의 문제은행에도 추가돼서 연습·복습에 섞여 나와요. 청해는 AI 생성이 없어요." }));
+  if (lastError) g.append(h("div", { class: "status err", role: "alert", text: lastError }));
+  v.append(g, h("section", { class: "panel stack", style: "margin-top:14px" }, h("div", { class: "label", text: "예시 세트 (API 없이 화면 확인용)" }),
+    h("div", { class: "row" }, [["vocab", "어휘 2문항"], ["grammar", "문법 3문항"], ["reading", "독해 단문"]].map(([key, label]) =>
+      h("button", { class: "btn small", onclick: () => openSet(prepSet(structuredClone(SAMPLES[key]))) }, label)))));
+}
 
-  if (!current) return;
+/* ---------- 홈 ---------- */
+const DAY_MS = 86400000;
+function ddayNum(){
+  const today = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }) + "T00:00:00+09:00");
+  return Math.round((EXAM - today) / DAY_MS);
+}
+/* 유형 목록의 풀이 기록(history) 정답률 */
+function accOf(kinds){
+  const set = new Set(kinds);
+  let right = 0, total = 0;
+  for (const r of history) if (set.has(r.kind)){ right += r.right; total += r.total; }
+  return { right, total, pct: total ? Math.round(right / total * 100) : null };
+}
+const groupKinds = grp => Object.keys(KINDS).filter(k => KINDS[k].group === grp);
+function groupProgress(grp){
+  let total = 0, seen = 0, due = 0;
+  for (const k of groupKinds(grp)){ const c = bankCounts(k); total += c.total; seen += c.total - c.left; due += c.due; }
+  return { total, seen, due, pct: total ? Math.round(seen / total * 100) : 0 };
+}
+const PART_JP = { "문자·어휘": "文字・語彙", "문법": "文法", "독해": "読解", "청해": "聴解" };
+const pct = n => n == null ? "–" : n + "%";
+const barNode = (p, cls = "") => h("div", { class: "bar " + cls }, h("i", { style: `width:${Math.max(0, Math.min(100, p || 0))}%` }));
+
+function renderHome(){
+  const v = $("view-home"); v.replaceChildren();
+  const dd = ddayNum();
+  const live = current && !current.done && !current.sample && current.questions.some(q => !q.checked);
+  v.append(h("section", { class: "panel hero" },
+    h("div", { class: "hero-top" },
+      h("div", null, h("div", { class: "big", text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }), h("div", { class: "sub", text: "2026년 12월 6일(일) JLPT N1" })),
+      live ? h("a", { class: "btn primary big", href: "#/play" }, "이어서 →") : null),
+    live ? h("p", { class: "hint", text: `풀던 세트: ${KINDS[current.kind]?.label || ""} · ${current.questions.filter(q => q.checked).length}/${current.questions.length}` }) : null));
+  v.append(h("div", { class: "parts" }, GROUPS.map(grp => {
+    const a = accOf(groupKinds(grp)), p = groupProgress(grp);
+    return h("a", { class: "part-card", href: "#/part/" + encodeURIComponent(grp) },
+      h("div", null, h("div", { class: "pc-name", text: grp }), h("div", { class: "pc-jp", lang: "ja", text: PART_JP[grp] })),
+      h("div", { class: "pc-stats" }, h("div", null, h("b", { text: pct(a.pct) }), h("span", { text: " 정답률" })), p.due ? h("div", null, h("b", { text: String(p.due) }), h("span", { text: " 복습" })) : null),
+      h("div", null, barNode(p.pct), h("span", { class: "hint", text: `진행 ${p.seen}/${p.total}` })));
+  })));
+  v.append(h("a", { class: "mock-card", href: "#/exam" },
+    h("div", null, h("b", { text: "실전 모의고사" }), h("span", { class: "hint", text: "1교시(언어지식·독해) → 휴식 → 청해, 점수 환산·합격 판정" })),
+    h("span", { class: "chev", text: "›" })));
+}
+
+/* ---------- 파트 → 유형 ---------- */
+function renderPart(grp){
+  const v = $("view-part"); v.replaceChildren();
+  if (!GROUPS.includes(grp)){ v.append(h("p", { class: "hint", text: "없는 파트예요." })); return; }
+  const list = h("div", { class: "menu" });
+  for (const key of groupKinds(grp)){
+    const k = KINDS[key], c = bankCounts(key), a = accOf([key]);
+    list.append(h("div", { class: "kind-row" },
+      h("div", { class: "kr-top" }, h("b", { text: k.label }), h("span", { class: "jp", lang: "ja", text: k.jp })),
+      h("div", { class: "kr-stats" },
+        h("span", null, "남은 ", h("b", { text: `${c.left}/${c.total}` }), c.unit),
+        h("span", null, "복습 ", h("b", { text: String(c.due) })),
+        h("span", null, "정답률 ", h("b", { text: pct(a.pct) }))),
+      h("div", { class: "kr-act" },
+        h("button", { class: "btn primary", disabled: !c.total, onclick: () => startPractice(key, !(c.left + c.due)) }, c.left + c.due || !c.total ? "연습" : "연습 (다시)"))));
+  }
+  v.append(list);
+  if (grp === "청해") v.append(h("p", { class: "hint", style: "margin-top:10px", text: "청해는 이 기기의 읽어주기(일본어 음성)로 들어요. 概要理解·統合理解는 아직 없어요." }));
+}
+
+/* ---------- 연습: 풀던 세트 ---------- */
+function openSet(set){ current = set; saveCurrent(); go("play"); }
+async function startPractice(kind, force = false){
+  const k = KINDS[kind];
+  try {
+    const set = await pickSet(kind, k.counts ? k.counts[k.counts.length - 1] : 1, { force });
+    if (!set){ toast("이 유형은 문제은행에 아직 문제가 없어요."); return; }
+    openSet(set);
+  } catch (e){ toast(e?.message || "문제은행을 열지 못했어요."); }
+}
+function renderPlay(){
+  const v = $("view-play"); v.replaceChildren();
+  if (!current){ v.append(h("div", { class: "panel empty" }, h("p", { text: "풀던 세트가 없어요." }), h("a", { class: "btn primary", href: "#/home" }, "홈으로"))); return; }
   const s = current;
   const sec = h("section", { class: "set" });
   const timer = h("span", { class: "mono", id: "set-timer", text: fmtTime(s.done ? s.elapsed : Date.now() - s.startedAt) });
@@ -587,13 +624,13 @@ function renderSolve(){
     source: s.title,
     onChange: async () => {
       if (!s.done && s.questions.every(x => x.checked)){ s.done = true; s.elapsed = Date.now() - s.startedAt; await logHistory(s); await recordSet(s).catch(() => {}); }
-      saveCurrent(); renderSolve();
+      saveCurrent(); renderPlay();
     },
     onCheck: async qq => { if (qq.sel !== qq.answer) await addNote(s, qq); renderNoteCount(); },
     extraActions: q.sel === q.answer
       ? [q.saved
-          ? h("button", { class: "btn small ghost", onclick: async () => { q.saved = false; await removeNote(s.id + "-" + i); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderSolve(); renderNoteCount(); } }, "오답노트에서 빼기")
-          : h("button", { class: "btn small ghost", onclick: async () => { await addNote(s, q); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderSolve(); renderNoteCount(); } }, "찍어서 맞힘 · 오답노트에 저장 · 복습에 넣기")]
+          ? h("button", { class: "btn small ghost", onclick: async () => { q.saved = false; await removeNote(s.id + "-" + i); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderPlay(); renderNoteCount(); } }, "오답노트에서 빼기")
+          : h("button", { class: "btn small ghost", onclick: async () => { await addNote(s, q); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderPlay(); renderNoteCount(); } }, "찍어서 맞힘 · 오답노트에 저장 · 복습에 넣기")]
       : [h("span", { class: "hint", text: "오답노트에 저장됐어요" })]
   })));
   sec.append(qs);
@@ -602,7 +639,7 @@ function renderSolve(){
     sec.append(h("div", { class: "summary panel" },
       h("div", null, h("div", { class: "label", text: "결과" }), h("span", { class: "score", text: `${right} / ${s.questions.length}` }),
         h("span", { class: "hint", text: `  ·  소요 ${fmtTime(s.elapsed)}` })),
-      h("button", { class: "btn primary", disabled: !!busy, onclick: () => { window.scrollTo({ top: 0, behavior: "smooth" }); startBank(); } }, "같은 유형 계속 풀기")));
+      s.sample ? h("a", { class: "btn", href: "#/home" }, "홈으로") : h("button", { class: "btn primary", onclick: () => { window.scrollTo({ top: 0 }); startPractice(s.kind); } }, "같은 유형 계속 풀기")));
   }
   v.append(sec);
 }
@@ -611,7 +648,7 @@ setInterval(() => { const t = $("set-timer"); if (t && current && !current.done)
 /* ---------- 오답노트 ---------- */
 const noteOpen = new Set(), noteRetry = new Map();
 let noteFilter = "전체", confirmClear = false;
-function renderNoteCount(){ $("note-count").textContent = notes.length; }
+function renderNoteCount(){ const c = $("note-count"); c.textContent = notes.length > 99 ? "99+" : String(notes.length); c.hidden = !notes.length; }
 function renderNote(){
   const v = $("view-note"); v.replaceChildren();
   renderNoteCount();
@@ -782,8 +819,7 @@ async function solveTag(tag){
   try {
     const set = await pickByTag(tag);
     if (!set){ toast("이 문법 문제가 아직 없어요"); return; }
-    current = set; saveCurrent(); showTab("solve");
-    document.querySelector(".set")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    openSet(set);
   } catch (e){ toast(e?.message || "문제를 열지 못했어요"); }
 }
 
@@ -791,7 +827,7 @@ async function solveTag(tag){
 const CARD_TYPES = { all: "전체", kanji: "한자", grammar: "문법", compare: "비슷한 말", keigo: "경어" };
 let cardFilter = "all", cardQuery = "", hideMeaning = false;
 const revealed = new Set();
-function renderCardsCount(){ $("card-count").textContent = cards.length; }
+function renderCardsCount(){}
 function myCards(v){
   if (!cards.length){
     v.append(h("div", { class: "panel empty" }, h("p", { text: "단어장이 비어 있어요." }),
@@ -855,7 +891,7 @@ function sentences(text){
     for (const s of line.match(/[^。！？!?]+[。！？!?]+[」』）)]*|[^。！？!?]+$/g) || []) if (s.trim()) out.push(s.trim());
   return out;
 }
-function renderIvCount(){ $("iv-count").textContent = answers.length; }
+function renderIvCount(){}
 
 function openDraft({ cat, question = "", text = "", editingId = null }){
   iv.draft = { cat: CAT[cat] ? cat : (CAT[iv.cat] ? iv.cat : CATS[0].key), question, text, editingId };
@@ -1086,36 +1122,12 @@ async function renderSettings(){
   const v = $("view-set"); v.replaceChildren();
 
   /* 보기 설정 */
-  const early = h("input", { id: "study-early", type: "checkbox", onchange: e => { settings.studyEarly = e.target.checked; savePrefs(); renderSolve(); } });
+  const early = h("input", { id: "study-early", type: "checkbox", onchange: e => { settings.studyEarly = e.target.checked; savePrefs(); } });
   early.checked = !!settings.studyEarly;
   v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "보기 설정" }),
     h("label", { class: "check", for: "study-early" }, early, "풀기 전에도 본문 해설 보기"),
     h("p", { class: "hint", text: "독해·文章の文法 지문 아래의 문장별 해석·단락 요지·전체 번역은 보통 세트를 다 푼 뒤에 열려요. 켜면 풀기 전에도 볼 수 있어요. (단어 탭은 그대로 다 푼 뒤에만)" }),
     ttsSettings()));
-
-  /* 학습 기록 */
-  const rec = h("section", { class: "panel stack" }, h("div", { class: "label", text: "학습 기록" }));
-  if (!history.length) rec.append(h("p", { class: "hint", text: "세트를 끝까지 풀면 여기에 점수와 시간이 쌓여요. (예시 세트는 기록하지 않아요)" }));
-  else {
-    const weekAgo = Date.now() - 7 * 86400000;
-    const recent = history.filter(r => r.at >= weekAgo);
-    const stats = GROUPS.map(grp => {
-      const rows = history.filter(r => KINDS[r.kind]?.group === grp);
-      const t = rows.reduce((a, r) => a + r.total, 0), r = rows.reduce((a, x) => a + x.right, 0);
-      return { grp, t, pct: t ? Math.round(r / t * 100) : null };
-    });
-    rec.append(h("div", { class: "stat-row" },
-      h("div", { class: "stat" }, h("span", { class: "stat-n mono", text: String(recent.length) }), h("span", { class: "hint", text: "최근 7일 세트" })),
-      ...stats.map(s => h("div", { class: "stat" }, h("span", { class: "stat-n mono", text: s.pct == null ? "–" : s.pct + "%" }), h("span", { class: "hint", text: `${s.grp} 정답률 · ${s.t}문항` })))));
-    const ul = h("ul", { class: "hist" });
-    for (const r of [...history].sort((a, b) => b.at - a.at).slice(0, 12)){
-      const d = new Date(r.at);
-      ul.append(h("li", null, h("span", { class: "mono", text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { lang: "ja", text: KINDS[r.kind]?.jp || "" }),
-        h("span", { class: "mono", text: `${r.right}/${r.total}` }), h("span", { class: "mono hint", text: fmtTime(r.elapsedMs) })));
-    }
-    rec.append(ul);
-  }
-  v.append(rec, tagStatsPanel(), minePanel());
 
   /* 기기 저장 · 백업 */
   persist = await persistState();
@@ -1148,6 +1160,35 @@ async function renderSettings(){
     `회 · 무료 한도는 미국 태평양 시간 자정(한국 ${resetTimeKST()})에 초기화돼요. 문제 세트 1개 = 호출 1회.`));
   v.append(p);
 }
+/* ---------- 기록 탭 ---------- */
+function renderRec(){
+  const v = $("view-rec"); v.replaceChildren();
+  /* 학습 기록 */
+  const rec = h("section", { class: "panel stack" }, h("div", { class: "label", text: "풀이 기록" }));
+  if (!history.length) rec.append(h("p", { class: "hint", text: "세트를 끝까지 풀면 여기에 점수와 시간이 쌓여요. (예시 세트는 기록하지 않아요)" }));
+  else {
+    const weekAgo = Date.now() - 7 * 86400000;
+    const recent = history.filter(r => r.at >= weekAgo);
+    const stats = GROUPS.map(grp => {
+      const rows = history.filter(r => KINDS[r.kind]?.group === grp);
+      const t = rows.reduce((a, r) => a + r.total, 0), r = rows.reduce((a, x) => a + x.right, 0);
+      return { grp, t, pct: t ? Math.round(r / t * 100) : null };
+    });
+    rec.append(h("div", { class: "stat-row" },
+      h("div", { class: "stat" }, h("span", { class: "stat-n mono", text: String(recent.length) }), h("span", { class: "hint", text: "최근 7일 세트" })),
+      ...stats.map(s => h("div", { class: "stat" }, h("span", { class: "stat-n mono", text: s.pct == null ? "–" : s.pct + "%" }), h("span", { class: "hint", text: `${s.grp} 정답률 · ${s.t}문항` })))));
+    const ul = h("ul", { class: "hist" });
+    for (const r of [...history].sort((a, b) => b.at - a.at).slice(0, 12)){
+      const d = new Date(r.at);
+      ul.append(h("li", null, h("span", { class: "mono", text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { lang: "ja", text: KINDS[r.kind]?.jp || "" }),
+        h("span", { class: "mono", text: `${r.right}/${r.total}` }), h("span", { class: "mono hint", text: fmtTime(r.elapsedMs) })));
+    }
+    rec.append(ul);
+  }
+  v.append(rec, tagStatsPanel());
+
+}
+function renderMine(){ const v = $("view-mine"); v.replaceChildren(minePanel()); }
 /* 읽어주기 설정: 속도·음성(기기에 있는 일본어 음성) */
 function ttsSettings(){
   const box = h("div", { class: "stack tts-set" }, h("div", { class: "label", text: "읽어주기 🔊" }));
@@ -1166,7 +1207,7 @@ function ttsSettings(){
   box.append(h("div", { class: "row" }, speakBtn("日本語能力試験に向けて、毎日少しずつ勉強を続けましょう。", "예시 문장"), h("span", { class: "hint", text: "예시 문장 들어 보기 · 단어·한자·문법은 읽기(히라가나)로, 문장은 원문 그대로 읽어요." })));
   return box;
 }
-onVoices(() => { if (!$("view-set").hidden) renderSettings(); });
+onVoices(() => { if (route.name === "set") renderSettings(); });
 /* 패턴별 통계: 문항의 patternTags 기준 출제 횟수 · 틀린 횟수(찍어서 맞힘 포함) */
 let tagGroup = "전체", tagAll = false;
 function tagStatsPanel(){
@@ -1176,7 +1217,7 @@ function tagStatsPanel(){
   const chips = h("div", { class: "chips" });
   for (const g of ["전체", ...GROUPS]){
     const n = g === "전체" ? all.length : all.filter(t => t.group === g).length;
-    chips.append(h("button", { class: "chip", "aria-pressed": String(tagGroup === g), onclick: () => { tagGroup = g; tagAll = false; renderSettings(); } }, g, h("small", { text: String(n) })));
+    chips.append(h("button", { class: "chip", "aria-pressed": String(tagGroup === g), onclick: () => { tagGroup = g; tagAll = false; renderRec(); } }, g, h("small", { text: String(n) })));
   }
   const rows = all.filter(t => tagGroup === "전체" || t.group === tagGroup);
   const table = h("table", { class: "tagstat" },
@@ -1185,7 +1226,7 @@ function tagStatsPanel(){
       h("td", { lang: "ja", text: t.id }), h("td", { class: "mono", text: String(t.seen) }), h("td", { class: "mono", text: String(t.wrong) }),
       h("td", { class: "mono", text: t.seen ? Math.round((t.seen - t.wrong) / t.seen * 100) + "%" : "–" })))));
   sec.append(chips, table);
-  if (rows.length > 20) sec.append(h("button", { class: "btn small ghost", onclick: () => { tagAll = !tagAll; renderSettings(); } }, tagAll ? "접기" : `더 보기 (${rows.length - 20}개)`));
+  if (rows.length > 20) sec.append(h("button", { class: "btn small ghost", onclick: () => { tagAll = !tagAll; renderRec(); } }, tagAll ? "접기" : `더 보기 (${rows.length - 20}개)`));
   return sec;
 }
 
@@ -1195,18 +1236,16 @@ const saveMine = () => prefs.set("n1.mine", mine);
 let mineDel = null;
 function minePanel(){
   const list = bank.local.filter(r => r.source === "mine");
-  const det = h("details", { class: "panel mine" });
-  det.open = mine.open;
-  det.addEventListener("toggle", () => { mine.open = det.open; saveMine(); });
-  det.append(h("summary", null, h("span", { class: "label", text: `내 문제 추가 · 이 기기에만 저장 (${list.length}개)` })));
+  const det = h("section", { class: "panel mine" });
+  det.append(h("div", { class: "label", text: `이 기기에만 저장 (${list.length}개)` }));
   const body = h("div", { class: "stack" });
   body.append(h("p", { class: "hint", text: "교재 문제 등을 직접 넣으면 문제은행에 섞여 나오고, 틀리면 복습 일정에도 들어가요. 이 기기에만 저장되고 백업 파일에는 포함돼요. GitHub 저장소에는 올라가지 않아요." }));
-  const sel = h("select", { id: "mine-kind", onchange: e => { mine.kind = e.target.value; saveMine(); renderSettings(); } },
+  const sel = h("select", { id: "mine-kind", onchange: e => { mine.kind = e.target.value; saveMine(); renderMine(); } },
     Object.entries(KINDS).filter(([, k]) => !k.listen).map(([key, k]) => { const o = h("option", { value: key }, `${k.group} · ${k.label} (${k.jp})`); o.selected = key === mine.kind; return o; }));
   body.append(h("label", { class: "field", for: "mine-kind" }, h("span", { class: "label", text: "유형" }), sel));
   body.append(h("div", { class: "chips" },
-    h("button", { class: "chip", "aria-pressed": String(mine.mode === "form"), onclick: () => { mine.mode = "form"; saveMine(); renderSettings(); } }, "직접 입력"),
-    h("button", { class: "chip", "aria-pressed": String(mine.mode === "json"), onclick: () => { mine.mode = "json"; saveMine(); renderSettings(); } }, "JSON 붙여넣기")));
+    h("button", { class: "chip", "aria-pressed": String(mine.mode === "form"), onclick: () => { mine.mode = "form"; saveMine(); renderMine(); } }, "직접 입력"),
+    h("button", { class: "chip", "aria-pressed": String(mine.mode === "json"), onclick: () => { mine.mode = "json"; saveMine(); renderMine(); } }, "JSON 붙여넣기")));
   const inp = (id, key, attrs = {}) => { const el = h(attrs.rows ? "textarea" : "input", { id, lang: "ja", ...attrs, oninput: e => { mine[key] = e.target.value; saveMine(); } }); el.value = mine[key]; return el; };
   if (mine.mode === "form"){
     const unitKind = !!KINDS[mine.kind].counts;
@@ -1224,7 +1263,7 @@ function minePanel(){
     body.append(h("label", { class: "field", for: "mine-why" }, h("span", { class: "label", text: "해설 (선택)" }), inp("mine-why", "why", { rows: "3" })));
     body.append(h("label", { class: "field", for: "mine-tags" }, h("span", { class: "label", text: "패턴 (선택, 쉼표로 구분: 〜にすぎない, 手分け)" }), inp("mine-tags", "tags", { type: "text" })));
     body.append(h("div", { class: "row" }, h("button", { class: "btn primary", onclick: saveMineForm }, "저장"),
-      h("button", { class: "btn ghost", onclick: () => { Object.assign(mine, { passage: "", stem: "", choices: ["", "", "", ""], answer: 0, why: "", tags: "" }); saveMine(); renderSettings(); } }, "비우기")));
+      h("button", { class: "btn ghost", onclick: () => { Object.assign(mine, { passage: "", stem: "", choices: ["", "", "", ""], answer: 0, why: "", tags: "" }); saveMine(); renderMine(); } }, "비우기")));
   } else {
     body.append(h("label", { class: "field", for: "mine-json" }, h("span", { class: "label", text: "JSON (문제 1개, 배열, {questions:[…]}, {units:[…]} 모두 가능)" }), inp("mine-json", "json", { rows: "8", lang: null, spellcheck: "false" })));
     body.append(h("p", { class: "hint", text: '예: {"stem":"…（　　）…","choices":["","","",""],"answer":0,"patternTags":["〜にすぎない"],"ex":{"why":"…"}} · answer는 0부터. 지문형은 {"passage":"…","questions":[…]}' }));
@@ -1237,9 +1276,9 @@ function minePanel(){
       ul.append(h("li", null, h("span", { class: "tag", lang: "ja", text: KINDS[r.kind]?.jp || r.kind }),
         h("span", { class: "stemline", lang: "ja", text: (q?.stem || r.unit.title || "").replace(/__/g, "") + (r.unit.questions.length > 1 ? ` 외 ${r.unit.questions.length - 1}문항` : "") }),
         mineDel === r.id
-          ? h("span", { class: "confirm" }, h("button", { class: "btn small", onclick: async () => { await removeLocal(r.id); mineDel = null; renderSettings(); renderSolve(); } }, "지우기"),
-              h("button", { class: "btn small ghost", onclick: () => { mineDel = null; renderSettings(); } }, "취소"))
-          : h("button", { class: "btn small ghost", onclick: () => { mineDel = r.id; renderSettings(); } }, "삭제")));
+          ? h("span", { class: "confirm" }, h("button", { class: "btn small", onclick: async () => { await removeLocal(r.id); mineDel = null; renderMine(); } }, "지우기"),
+              h("button", { class: "btn small ghost", onclick: () => { mineDel = null; renderMine(); } }, "취소"))
+          : h("button", { class: "btn small ghost", onclick: () => { mineDel = r.id; renderMine(); } }, "삭제")));
     }
     body.append(h("div", null, h("div", { class: "label", text: "내가 추가한 문제" }), ul));
   }
@@ -1256,7 +1295,7 @@ async function saveMineForm(){
     await addLocalUnits(mine.kind, units, "mine");
   } catch (e){ toast(e?.message || "저장하지 못했어요"); return; }
   Object.assign(mine, { stem: "", choices: ["", "", "", ""], answer: 0, why: "", tags: "" });   // 지문은 남겨서 같은 지문 문항을 이어서 넣기 쉽게
-  saveMine(); toast("내 문제에 저장했어요"); renderSettings(); renderSolve();
+  saveMine(); toast("내 문제에 저장했어요"); renderMine();
 }
 async function saveMineJson(){
   let data;
@@ -1272,7 +1311,7 @@ async function saveMineJson(){
   }
   if (ok){ mine.json = ""; saveMine(); }
   toast(`저장 ${ok}개${bad ? ` · 형식 오류로 건너뜀 ${bad}개` : ""}`);
-  renderSettings(); renderSolve();
+  renderMine();
 }
 
 async function doExport(){
@@ -1291,24 +1330,74 @@ async function doImport(e){
     const counts = await importAll(JSON.parse(await file.text()));
     await loadAll();
     toast(`불러왔어요: 오답 ${counts.notes} · 단어 ${counts.cards} · 기록 ${counts.history} · 답변 ${counts.answers} · 문제 ${counts.localBank}`);
-    renderAll(); renderSettings();
+    renderSettings();
   } catch (err){ toast(err?.message || "백업 파일을 읽지 못했어요."); }
   e.target.value = "";
 }
 
-/* ---------- tabs ---------- */
-const TABS = ["solve", "note", "cards", "iv", "set"];
-function showTab(name){
-  for (const t of TABS){ $("tab-" + t).setAttribute("aria-selected", String(t === name)); $("view-" + t).hidden = t !== name; }
-  try { sessionStorage.setItem("n1.tab", name); } catch {}
-  if (name === "note") renderNote();
-  if (name === "cards") renderCards();
-  if (name === "set") renderSettings();
-  if (name === "iv") renderInterview();
-  if (name === "solve") renderSolve();
-  window.scrollTo({ top: 0 });
+/* ---------- 화면 이동: 해시 경로(#/part/문법 …). 안드로이드 뒤로가기가 앱 안에서 동작한다 ---------- */
+/* name → [하단 탭, 상단 제목, 부모 경로, 몰입 화면(하단 탭 숨김)] */
+const VIEWS = {
+  home: ["home", "N1 연습장"], part: ["home", null, "home"], play: ["home", null, "home", true], book: ["home", "문제집", "home"], exam: ["home", "실전 모의고사", "home"],
+  cards: ["cards", "단어장"], note: ["note", "오답노트"], rec: ["rec", "기록"],
+  more: ["more", "더보기"], iv: ["more", "면접", "more"], set: ["more", "설정", "more"], mine: ["more", "내 문제 추가", "more"], ai: ["more", "AI로 새 문제", "more"],
+};
+const route = { name: "home", args: [] };
+/* 앱 안에서 쌓은 깊이를 history.state.d에 둔다. 뒤로 버튼: 깊이가 있으면 브라우저 뒤로, 처음 연 화면이면 부모 화면으로 */
+const nav = window.history;                            // (history는 풀이 기록 배열 이름으로 쓰고 있음)
+let navDepth = 0;
+function parseHash(){
+  const [name, ...args] = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
+  return VIEWS[name] ? { name, args } : { name: "home", args: [] };
 }
-function renderAll(){ renderSolve(); renderNoteCount(); renderCardsCount(); renderIvCount(); }
+function go(path, { replace = false } = {}){
+  const hash = "#/" + path;
+  if (location.hash === hash){ render(); return; }
+  if (replace){ nav.replaceState({ d: navDepth }, "", hash); render(); }
+  else location.hash = hash;
+}
+function goBack(){
+  if (navDepth > 0){ nav.back(); return; }
+  const parent = route.name === "play" && current?.book ? `book/${current.book.kind}` : VIEWS[route.name][2] || "home";
+  go(parent, { replace: true });
+}
+function parentTitle(){
+  if (route.name === "part") return route.args[0] || "";
+  if (route.name === "play") return current ? (KINDS[current.kind]?.label || "") : "연습";
+  return VIEWS[route.name][1];
+}
+function render(){
+  Object.assign(route, parseHash());
+  const [tab, , parent, immersive] = VIEWS[route.name];
+  for (const name of Object.keys(VIEWS)) $("view-" + name).hidden = name !== route.name;
+  document.querySelectorAll("#tabbar a").forEach(a => { if (a.dataset.tab === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+  $("back").hidden = !parent;
+  $("title").textContent = parentTitle();
+  document.body.classList.toggle("immersive", !!immersive);
+  document.body.classList.toggle("at-home", route.name === "home");
+  closeGloss();
+  ({ home: renderHome, part: () => renderPart(route.args[0]), play: renderPlay, book: renderBook, exam: renderExam, cards: renderCards, note: renderNote, rec: renderRec,
+     more: renderMore, iv: renderInterview, set: renderSettings, mine: renderMine, ai: renderAI })[route.name]();
+}
+window.addEventListener("hashchange", () => {
+  if (nav.state?.d == null) nav.replaceState({ d: navDepth + 1 }, "", location.hash);   // 새로 들어온 화면
+  navDepth = nav.state.d;
+  render(); window.scrollTo({ top: 0 });
+});
+function renderAll(){ render(); renderNoteCount(); }
+
+/* ---------- 더보기 ---------- */
+function renderMore(){
+  const v = $("view-more"); v.replaceChildren();
+  const row = (href, title, sub) => h("a", { href }, h("div", null, h("span", { text: title }), h("span", { class: "m-sub", text: sub })), h("span", { class: "chev", text: "›" }));
+  v.append(h("nav", { class: "menu" },
+    row("#/iv", "면접", `내 답변 노트 ${answers.length}개 · 경어 카드 ${KEIGO.length}장`),
+    row("#/set", "설정", "읽어주기 · 보기 · 백업 · Gemini API 키"),
+    row("#/mine", "내 문제 추가", `교재 문제 등 직접 입력 · ${bank.local.filter(r => r.source === "mine").length}개`),
+    row("#/ai", "AI로 새 문제", "Gemini로 만들기 · 예시 세트")));
+}
+function renderBook(){ $("view-book").replaceChildren(h("p", { class: "hint", text: "문제집은 준비 중이에요." })); }
+function renderExam(){ $("view-exam").replaceChildren(h("div", { class: "panel empty" }, h("p", { text: "실전 모의고사는 준비 중이에요." }))); }
 
 /* ---------- boot ---------- */
 async function loadAll(){
@@ -1330,13 +1419,14 @@ async function backfillAll(){
   let changed = false;
   if (current && await backfillStudy(current)){ saveCurrent(); changed = true; }
   for (const n of notes) if (await backfillStudy(n)){ await db.put("notes", n).catch(() => {}); changed = true; }
-  if (changed){ renderSolve(); renderNote(); }
+  if (changed && (route.name === "play" || route.name === "note")) render();
 }
 async function boot(){
-  for (const t of TABS) $("tab-" + t).addEventListener("click", () => showTab(t));
-  const today = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }) + "T00:00:00+09:00");
-  const dd = Math.round((EXAM - today) / 86400000);
-  $("dday").append(h("span", { text: "12월 6일(일) 시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
+  $("back").addEventListener("click", goBack);
+  navDepth = nav.state?.d ?? 0;
+  if (nav.state?.d == null) nav.replaceState({ d: 0 }, "", location.hash || "#/home");
+  const dd = ddayNum();
+  $("dday").append(h("span", { text: "시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
 
   await Promise.all([loadIndex(), loadVocabIndex()]);
   try {
@@ -1353,11 +1443,8 @@ async function boot(){
   } catch {
     $("db-warn").hidden = false;
   }
-  if (!current) current = prepSet(structuredClone(SAMPLES.grammar));
   renderAll();
   backfillAll();
-  let start = "solve"; try { start = sessionStorage.getItem("n1.tab") || "solve"; } catch {}
-  showTab(TABS.includes(start) ? start : "solve");
 
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("./sw.js").catch(() => {});
 }

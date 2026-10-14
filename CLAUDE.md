@@ -19,10 +19,10 @@ python3 -m http.server 8000      # 또는: npx serve .
 ## 구조
 
 ```
-index.html             화면 뼈대, 탭 5개(문제 / 오답노트 / 단어장 / 면접 / 기록·설정)
+index.html             화면 뼈대: 상단 앱바(뒤로·제목·D-day) + 화면(main#view-*) + 하단 탭 5개(홈 / 단어장 / 오답노트 / 기록 / 더보기)
 manifest.webmanifest   PWA(홈 화면 설치)
 sw.js                  오프라인 캐시(문제은행 포함). 앱 파일·문제은행을 고치면 VERSION을 올릴 것
-src/main.js            상태와 렌더링 전부 (탭별 render* 함수)
+src/main.js            상태와 렌더링 전부. 해시 경로(#/home, #/part/문법, #/play …)마다 render* 함수(VIEWS 표). 더보기 = 면접·설정·내 문제·AI
 src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제
 src/vocab.js           기본 단어장 로드·외웠어요(vocabDone)·틀리면 외웠어요 해제
 src/kinds.js           N1 1교시 12개 + 청해 3개 문제 유형 정의, 주제 목록, 시험일
