@@ -40,6 +40,8 @@ function status(id, now){
   if (p.due != null) return p.due <= now ? "due" : "wait";
   return "done";
 }
+/* 단위 하나의 평균 문항 수 (문항형 1, 지문형은 세트당 문항 수) */
+export const qPerUnit = kind => { const k = index.kinds[kind]; return k?.units ? k.questions / k.units : 1; };
 /* 유형별 남은 수(안 푼 단위) / 전체 / 지금 복습할 것 / 다음 복습 시각 */
 export function bankCounts(kind, now = Date.now()){
   const c = { total: 0, left: 0, due: 0, wait: 0, nextDue: null, unit: isUnitKind(kind) ? "문항" : "세트" };

@@ -405,3 +405,16 @@ a.btn.disabled{opacity:.45;pointer-events:none}
 .tag.ng{border-color:var(--ng);color:var(--ng)}
 .hist li.link{cursor:pointer}
 main > .panel + .panel,main > .panel + details.panel{margin-top:12px}
+/* ---- 데일리 학습 ---- */
+.today-n{display:grid;justify-items:end}
+.today-n b{font-size:24px}
+.streak{display:grid;justify-items:center;min-width:56px}
+.streak b{font-size:17px}
+.done-banner{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:600}
+.checklist{margin-top:12px;padding:12px 6px 6px}
+.cl-head{display:flex;justify-content:space-between;align-items:baseline;padding:0 10px}
+.cl-item{display:flex;align-items:center;gap:12px;width:100%;min-height:58px;padding:8px 10px;border:0;border-top:1px solid var(--line);background:none;text-align:left;color:var(--ink)}
+.cl-item .ck{flex:none;width:26px;height:26px;border-radius:50%;border:1.5px solid var(--muted);display:grid;place-items:center;font-size:14px;font-weight:700}
+.cl-item.done .ck{background:var(--ok);border-color:var(--ok);color:var(--sheet)}
+.cl-item.done .cl-label{color:var(--muted);text-decoration:line-through}
+.cl-label{font-weight:500}

@@ -26,6 +26,7 @@ src/main.js            상태와 렌더링 전부. 해시 경로(#/home, #/part/
 src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제·문제집 회차(bookRounds)·모의고사 예약 제외
 src/vocab.js           기본 단어장 로드·외웠어요(vocabDone)·틀리면 외웠어요 해제
 src/kinds.js           N1 1교시 12개 + 청해 3개 문제 유형 정의, 주제 목록, 시험일
+src/daily.js           데일리 학습 배분 규칙(planDay, 주석에 규칙 설명)·연속 학습일
 src/exam.js            실전 모의고사: 구성·예약 읽기, 교시 세트 만들기, 시간(문항 수 비례/공식), 점수 환산(추정)
 src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱

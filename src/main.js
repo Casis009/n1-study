@@ -12,7 +12,8 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
-import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, markWrongUnits } from "./bank.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, markWrongUnits, qPerUnit } from "./bank.js";
+import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, streak } from "./daily.js";
 import { EXAM_CFG, loadExam, examRounds, reservedIds, buildSection, sectionMinutes, scoreExam } from "./exam.js";
 import { hasKanji, rubyParts } from "./furigana.js";
 import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, RATE_LABEL, speakerSplit } from "./tts.js";
@@ -22,7 +23,7 @@ const GROUPS = ["문자·어휘", "문법", "독해", "청해"];
 const NUM = ["①", "②", "③", "④"];
 
 /* ---------- state ---------- */
-const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "", listenMode: "exam" }, prefs.get("n1.settings", {}));
+const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "", listenMode: "exam", dailyMin: 60 }, prefs.get("n1.settings", {}));
 setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice });
 const gen = Object.assign({ kind: "grammar_blank", count: 5, topic: "", weak: true }, prefs.get("n1.gen", {}));
 if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
@@ -564,15 +565,77 @@ const PART_JP = { "문자·어휘": "文字・語彙", "문법": "文法", "독�
 const pct = n => n == null ? "–" : n + "%";
 const barNode = (p, cls = "") => h("div", { class: "bar " + cls }, h("i", { style: `width:${Math.max(0, Math.min(100, p || 0))}%` }));
 
+/* ---------- 데일리 학습 (배분 규칙은 src/daily.js) ---------- */
+let dailyRows = new Map();
+const accRatio = grp => { const a = accOf(groupKinds(grp)); return a.total ? a.right / a.total : null; };
+/* 오늘 계획: 그날 처음 열 때 정해서 저장. 하루 학습 시간을 바꾸면 다시 계산 */
+function todayRow(){
+  const id = dayKey(), min = settings.dailyMin || 60;
+  let row = dailyRows.get(id);
+  if (row?.plan && row.plan.minutes === min) return row;
+  const counts = {};
+  for (const k of Object.keys(KINDS)){ const c = bankCounts(k); if (c.total) counts[k] = { left: c.left, due: c.due, qPerUnit: qPerUnit(k) }; }
+  const lastMock = [...exams].filter(e => e.result).sort((a, b) => b.startedAt - a.startedAt)[0];
+  const plan = planDay({ minutes: min, daysLeft: ddayNum(), acc: Object.fromEntries(GROUPS.map(g => [g, accRatio(g)])), counts,
+    dueCards: dueCardCount(), lastMockAt: lastMock?.startedAt || null, mockLeft: examRounds().filter(no => !releasedRounds().has(no)).length });
+  row = { ...(row || { id, done: {}, test: null, completedAt: null }), plan, planAt: Date.now() };
+  dailyRows.set(id, row); db.put("daily", row).catch(() => {});
+  return row;
+}
+/* 오늘 유형별로 푼 문항 수(모의고사 제외) */
+function solvedToday(){
+  const start = new Date(dayKey() + "T00:00:00+09:00").getTime(), m = new Map();
+  for (const r of history) if (r.at >= start && !r.exam) m.set(r.kind, (m.get(r.kind) || 0) + r.total);
+  return m;
+}
+/* 체크리스트 항목: { key, label, sub, done, progress: [n, total], go() } */
+function todayItems(){
+  const row = todayRow(), p = row.plan, solved = solvedToday(), items = [];
+  items.push(...cardItems(row));
+  for (const it of p.parts){
+    const n = Math.min(solved.get(it.kind) || 0, it.questions);
+    items.push({ key: "part:" + it.kind, label: `${KINDS[it.kind].label} ${it.questions}문항`, sub: `${KINDS[it.kind].jp}${it.review ? ` · 복습 ${it.review}${isUnit(it.kind) ? "" : "세트"} 포함` : ""} · 약 ${it.min}분`,
+      done: n >= it.questions, progress: [n, it.questions],
+      go: () => isUnit(it.kind) ? startPractice(it.kind, !(bankCounts(it.kind).left + bankCounts(it.kind).due), Math.min(10, Math.max(1, it.questions - n))) : startPractice(it.kind) });
+  }
+  if (p.mock){
+    const today = exams.some(e => dayKey(e.startedAt) === dayKey());
+    items.push({ key: "mock", label: "실전 모의고사 (이번 주 추천)", sub: "시험 2주 전부터 주 1회", done: today && !activeExam(), progress: null, go: () => go(activeExam() ? "exam/run" : "exam") });
+  }
+  return items;
+}
+const isUnit = k => !!KINDS[k]?.counts;
+function checkDailyDone(items){
+  const row = todayRow();
+  if (!row.completedAt && items.length && items.every(i => i.done)){ row.completedAt = Date.now(); db.put("daily", row).catch(() => {}); toast("오늘의 학습을 다 했어요! 🎉"); }
+}
+const doneDays = () => new Set([...dailyRows.values()].filter(r => r.completedAt).map(r => r.id));
+
 function renderHome(){
   const v = $("view-home"); v.replaceChildren();
   const dd = ddayNum();
   const live = current && !current.done && !current.sample && current.questions.some(q => !q.checked);
+  const items = todayItems(); checkDailyDone(items);
+  const row = todayRow(), nDone = items.filter(i => i.done).length, st = streak(doneDays());
+  const next = items.find(i => !i.done);
+  const cont = live ? () => go("play") : next ? next.go : null;
   v.append(h("section", { class: "panel hero" },
     h("div", { class: "hero-top" },
       h("div", null, h("div", { class: "big", text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }), h("div", { class: "sub", text: "2026년 12월 6일(일) JLPT N1" })),
-      live ? h("a", { class: "btn primary big", href: "#/play" }, "이어서 →") : null),
-    live ? h("p", { class: "hint", text: `풀던 세트: ${KINDS[current.kind]?.label || ""} · ${current.questions.filter(q => q.checked).length}/${current.questions.length}` }) : null));
+      h("div", { class: "today-n" }, h("span", { class: "hint", text: "오늘의 학습" }), h("b", { class: "mono", text: `${nDone}/${items.length}` }))),
+    barNode(items.length ? nDone / items.length * 100 : 0, row.completedAt ? "ok" : ""),
+    h("div", { class: "row" },
+      cont ? h("button", { class: "btn primary big grow", onclick: cont }, live ? `이어서 · ${KINDS[current.kind]?.label} ${current.questions.filter(q => q.checked).length}/${current.questions.length}` : `이어서 · ${next.label}`)
+        : h("div", { class: "done-banner grow", text: "✓ 오늘의 학습 완료" }),
+      h("div", { class: "streak", title: "연속 학습일" }, h("b", { class: "mono", text: `🔥 ${st}` }), h("span", { class: "hint", text: "일 연속" })))));
+  const list = h("section", { class: "panel checklist" },
+    h("div", { class: "cl-head" }, h("div", { class: "label", text: `오늘의 학습 · ${row.plan.minutes}분` }), h("a", { class: "hint", href: "#/set" }, "시간 바꾸기")));
+  for (const it of items) list.append(h("button", { class: "cl-item" + (it.done ? " done" : ""), type: "button", onclick: it.go },
+    h("span", { class: "ck", "aria-hidden": "true", text: it.done ? "✓" : "" }),
+    h("div", { class: "grow" }, h("div", { class: "cl-label", text: it.label }), h("div", { class: "hint", text: it.sub })),
+    it.progress ? h("span", { class: "mono hint", text: `${it.progress[0]}/${it.progress[1]}` }) : null));
+  if (!items.length) list.append(h("p", { class: "hint", text: "오늘 배분할 문제가 없어요. 문제은행을 다 풀었다면 연습의 [다시]로 복습해 보세요." }));
+  v.append(list);
   v.append(h("div", { class: "parts" }, GROUPS.map(grp => {
     const a = accOf(groupKinds(grp)), p = groupProgress(grp);
     return h("a", { class: "part-card", href: "#/part/" + encodeURIComponent(grp) },
@@ -582,10 +645,13 @@ function renderHome(){
   })));
   const act = activeExam(), lastEx = [...exams].reverse().find(e => e.result);
   v.append(h("a", { class: "mock-card", href: act ? "#/exam/run" : "#/exam" },
-    h("div", null, h("b", { text: "실전 모의고사" }),
+    h("div", null, h("b", null, "실전 모의고사", row.plan.mock ? h("span", { class: "badge", text: "이번 주 추천" }) : null),
       h("span", { class: "hint", text: act ? `${act.round}회 진행 중 · 이어서` : lastEx ? `최근 ${lastEx.round}회 ${lastEx.result.total}/${lastEx.result.max}점 (추정) · ${examRounds().length}회분` : "1교시(언어지식·독해) → 휴식 → 청해, 점수 환산·합격 판정" })),
     h("span", { class: "chev", text: "›" })));
 }
+/* 단어·문법 카드 항목은 5단계(카드 암기)에서 */
+function cardItems(){ return []; }
+function dueCardCount(){ return 0; }
 
 /* ---------- 파트 → 유형 ---------- */
 function renderPart(grp){
@@ -616,10 +682,10 @@ function openSet(set){
   if (set.pos == null){ const i = set.questions.findIndex(q => !q.checked); set.pos = i < 0 ? set.questions.length : i; }
   current = set; saveCurrent(); go("play");
 }
-async function startPractice(kind, force = false){
+async function startPractice(kind, force = false, count = null){
   const k = KINDS[kind];
   try {
-    const set = await pickSet(kind, k.counts ? k.counts[k.counts.length - 1] : 1, { force });
+    const set = await pickSet(kind, count || (k.counts ? k.counts[k.counts.length - 1] : 1), { force });
     if (!set){ toast("이 유형은 문제은행에 아직 문제가 없어요."); return; }
     openSet(set);
   } catch (e){ toast(e?.message || "문제은행을 열지 못했어요."); }
@@ -1497,6 +1563,11 @@ let showKey = false;
 async function renderSettings(){
   const v = $("view-set"); v.replaceChildren();
 
+  /* 하루 학습 시간 → 데일리 학습 배분 */
+  v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "하루 학습 시간" }),
+    h("div", { class: "chips" }, DAILY_OPTIONS.map(m => h("button", { class: "chip", type: "button", "aria-pressed": String((settings.dailyMin || 60) === m),
+      onclick: () => { settings.dailyMin = m; savePrefs(); renderSettings(); toast(`하루 ${m}분으로 오늘 계획을 다시 짰어요`); } }, `${m}분`))),
+    h("p", { class: "hint", text: `홈의 '오늘의 학습'을 이 시간에 맞춰 나눠요: 새 단어 ${NEW_CARDS[settings.dailyMin || 60].words}개 · 문법 ${NEW_CARDS[settings.dailyMin || 60].grammar}개 + 복습할 문제 먼저 + 정답률 낮은 파트에 더 많이. (30분: 단어 15·문법 3, 60분: 25·5, 90분: 35·7)` })));
   /* 보기 설정 */
   const early = h("input", { id: "study-early", type: "checkbox", onchange: e => { settings.studyEarly = e.target.checked; savePrefs(); } });
   early.checked = !!settings.studyEarly;
@@ -1786,8 +1857,9 @@ function renderMore(){
 
 /* ---------- boot ---------- */
 async function loadAll(){
-  let bookRows, markRows;
-  [notes, cards, history, answers, bookRows, markRows] = await Promise.all(["notes", "cards", "history", "answers", "book", "marks"].map(st => db.all(st)));
+  let bookRows, markRows, dayRows;
+  [notes, cards, history, answers, bookRows, markRows, dayRows] = await Promise.all(["notes", "cards", "history", "answers", "book", "marks", "daily"].map(st => db.all(st)));
+  dailyRows = new Map(dayRows.map(r => [r.id, r]));
   books = new Map(bookRows.map(r => [r.id, r])); marks = new Map(markRows.map(r => [r.id, r]));
   exams = (await db.all("exams")).sort((a, b) => a.startedAt - b.startedAt);
   applyReserve();
