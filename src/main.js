@@ -24,7 +24,7 @@ const GROUPS = ["문자·어휘", "문법", "독해", "청해"];
 const NUM = ["①", "②", "③", "④"];
 
 /* ---------- state ---------- */
-const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "", listenMode: "exam", dailyMin: 60 }, prefs.get("n1.settings", {}));
+const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "", listenMode: "exam", dailyMin: 60, furigana: "main" }, prefs.get("n1.settings", {}));
 setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice });
 const gen = Object.assign({ kind: "grammar_blank", count: 5, topic: "", weak: true }, prefs.get("n1.gen", {}));
 if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
@@ -35,7 +35,7 @@ let busy = null, lastError = "", toastTimer = null;
 let persist = "unsupported";
 
 /* 기기 간 동기화하는 설정(API 키·읽기 음성은 제외). 바뀌면 n1.prefsU(바꾼 시각)를 남긴다 */
-const SYNC_PREF_KEYS = ["dailyMin", "ttsRate", "listenMode", "studyEarly", "model"];
+const SYNC_PREF_KEYS = ["dailyMin", "ttsRate", "listenMode", "studyEarly", "model", "furigana"];
 const syncedPrefs = () => Object.fromEntries(SYNC_PREF_KEYS.map(k => [k, settings[k]]));
 let prefsSnap = JSON.stringify(syncedPrefs());
 const savePrefs = () => {
@@ -153,7 +153,7 @@ function glossNodes(text, gl){
     if (!g){ buf += text[i++]; continue; }
     if (buf){ out.push(buf); buf = ""; }
     gl.used.add(g.w);
-    out.push(h("button", { class: "gl", type: "button", lang: "ja", text: g.w, onclick: e => { e.stopPropagation(); openGloss(e.currentTarget, g, gl.source); } }));
+    out.push(h("button", { class: "gl", type: "button", lang: "ja", onclick: e => { e.stopPropagation(); openGloss(e.currentTarget, g, gl.source); } }, gl.ruby ? rubyFrag(g.w, g.r) : g.w));
     i += g.w.length;
   }
   if (buf) out.push(buf);
@@ -195,7 +195,34 @@ function rubyNode(text, reading, { cls = null, hide = false } = {}){
   else el.append(text, !hide && reading && hasKanji(text) ? h("span", { class: "r", text: `（${reading}）` }) : "");
   return el;
 }
-const glossOf = (list, on, source) => on && list?.length ? { list: [...list].sort((a, b) => b.w.length - a.w.length), used: new Set(), source } : null;
+/* 단어 탭 목록. ruby = gloss 단어 위에 읽기(설정 '예문 후리가나', 카드 뒷면은 항상) */
+const glossOf = (list, on, source, { ruby = settings.furigana !== "off" } = {}) => on && list?.length ? { list: [...list].sort((a, b) => b.w.length - a.w.length), used: new Set(), source, ruby } : null;
+/* 한자 부분에만 <ruby>. 표제어와 읽기가 안 맞으면 그냥 글자 */
+function rubyFrag(w, r){
+  const parts = rubyParts(w, r);
+  return parts ? parts.map(p => p.r ? h("ruby", null, p.t, h("rt", { text: p.r })) : p.t) : w;
+}
+/*
+ * 직접 입력한 문장(면접 답변·꼬리 질문)·설명 속 일본어: 기본 단어장 표제어(한자 읽기·어휘)와 그대로 일치하는 단어만 탭.
+ * 단어장 파일을 처음 쓸 때 불러오고, 불러온 뒤 화면을 다시 그린다.
+ */
+let dictList = null, dictLoading = false;
+function dictGloss(text, source){
+  if (!text) return null;
+  if (!dictList){
+    if (!dictLoading){ dictLoading = true; vocabById().then(all => {
+      dictList = [...all.values()].filter(e => e.kind !== "grammar").map(e => ({ w: e.it.word, r: e.it.reading, m: e.it.meaning }))
+        .filter(g => g.w && (hasKanji(g.w) ? g.w.length >= 2 : g.w.length >= 4)).sort((a, b) => b.w.length - a.w.length);
+      render();
+    }).catch(() => { dictLoading = false; }); }
+    return null;
+  }
+  const list = dictList.filter(g => text.includes(g.w));
+  return list.length ? glossOf(list, true, source) : null;
+}
+/* 경어 카드·면접 예시 질문의 gloss (data/gloss-extra.json) */
+let glossExtra = { keigo: {}, interview: {} };
+async function loadGlossExtra(){ try { const r = await fetch("./data/gloss-extra.json"); if (r.ok) glossExtra = await r.json(); } catch {} }
 let glossPop = null;
 function closeGloss(){ glossPop?.remove(); glossPop = null; }
 document.addEventListener("click", e => { if (glossPop && !glossPop.contains(e.target)) closeGloss(); });
@@ -389,7 +416,7 @@ function explanationNode(q, source){
   if (q.script?.length) box.append(scriptNode(q, source));
   const tr = ex.translation || {};
   if (tr.full || tr.ko) box.append(h("section", null, h("h4", { text: "문제 해석" }),
-    tr.full ? h("p", { class: "tr-jp", lang: "ja" }, h("span", { text: tr.full }), speakBtn(tr.full.replace(/★/g, ""), "완성 문장")) : null, tr.ko ? h("p", { text: tr.ko }) : null));
+    tr.full ? h("p", { class: "tr-jp", lang: "ja" }, h("span", null, glossNodes(tr.full, glossOf(q.gloss, true, source))), speakBtn(tr.full.replace(/★/g, ""), "완성 문장")) : null, tr.ko ? h("p", { text: tr.ko }) : null));
   if (ex.why) box.append(h("section", null, h("h4", { text: "정답 근거" }), h("p", { text: ex.why })));
   if (ex.choicesKo?.some(c => c.ko)) box.append(h("section", null, h("h4", { text: "선택지 해석" }),
     h("ul", { class: "notes cko" }, ex.choicesKo.map((c, i) => h("li", { class: i === q.answer ? "isans" : null }, h("span", { class: "n", text: NUM[i] }),
@@ -404,7 +431,7 @@ function explanationNode(q, source){
   if (ex.grammar.length) box.append(h("section", null, h("h4", { text: "주요 문법" }),
     h("div", { class: "gram" }, ex.grammar.map(g => h("div", { class: "gr" },
       h("div", { class: "gr-top" }, rubyNode(g.pattern, g.reading), h("span", { text: g.meaning ? "· " + g.meaning : "" }), starBtn("grammar", g, source)),
-      g.example ? h("div", { class: "ex-jp", text: g.example }) : null)))));
+      g.example ? h("div", { class: "ex-jp" }, glossNodes(g.example, dictGloss(g.example, source))) : null)))));
   if (ex.compare?.length) box.append(h("section", null, h("h4", { text: "비슷한 말 비교" }),
     h("div", { class: "cmp" }, ex.compare.map(c => h("div", null,
       h("div", { class: "row1" }, h("b", { lang: "ja", text: c.word }), c.reading ? h("span", { class: "r", lang: "ja", text: `（${c.reading}）` }) : null, h("span", { text: c.meaning }), starBtn("compare", c, source)),
@@ -1175,7 +1202,7 @@ function vocabTestNotes(v, list){
         n.wrongN > 1 ? h("span", { class: "tag wrong", text: `틀림 ×${n.wrongN}` }) : null),
       h("div", { class: "stemline", lang: "ja", text: head })));
     const body = h("div", { class: "note-body" });
-    body.append(h("div", { class: "hint", text: q.ask || "" }), h("div", { class: "vt-prompt", lang: q.type === "word" ? null : "ja", text: q.prompt }));
+    body.append(h("div", { class: "hint", text: q.ask || "" }), h("div", { class: "vt-prompt", lang: q.type === "word" ? null : "ja" }, promptNodes({ ...q, id: n.vid }, !r || r.sel != null)));
     if (r){                                                    // 다시 풀기
       body.append(h("ol", { class: "choices" }, q.choices.map((c, i) => {
         const done = r.sel != null, cls = "choice" + (done && i === q.answer ? " right" : done && i === r.sel ? " wrongpick" : "");
@@ -1309,7 +1336,7 @@ function vocabCard(kind, it, wrongN){
   }
   body.append(h("div", { class: "extra", lang: "ja" }, glossNodes(it.example, glossOf(it.gloss, true, "기본 단어장")), speakBtn(it.example, "예문")), h("div", { class: "src", text: it.exampleKo }));
   if (kind === "grammar" && it.similar?.length) body.append(h("div", { class: "similar" }, it.similar.map(s =>
-    h("div", null, rubyNode(s.pattern, s.reading), h("span", { text: " — " + s.diff })))));
+    h("div", null, rubyNode(s.pattern, s.reading), h("span", null, " — ", glossNodes(s.diff, dictGloss(s.diff, "기본 단어장")))))));
   if (kind === "grammar"){
     const n = tagUnitCount(it.pattern);
     body.append(h("div", null, h("button", { class: "btn small", disabled: !n, onclick: async e => { e.stopPropagation(); await solveTag(it.pattern); } },
@@ -1427,7 +1454,7 @@ function flashCard({ kind, it }, st, isNew){
   const back = h("div", { class: "flash-face back" }, tag.cloneNode(true), ...cardBackNodes({ kind, it }));
   el.append(front, back);
   const flip = () => { flashFlip = !flashFlip; el.classList.toggle("flipped", flashFlip); };
-  el.addEventListener("click", e => { if (e.target.closest(".spk,.gl") || el.dataset.dragged) return; flip(); });
+  el.addEventListener("click", e => { if (e.target.closest(".spk,.gl,.gloss-pop") || el.dataset.dragged) return; flip(); });
   el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); flip(); } });
   return el;
 }
@@ -1442,7 +1469,7 @@ function cardBackNodes({ kind, it }){
     kind === "grammar" && it.connection ? h("div", { class: "hint", lang: "ja", text: `접속: ${it.connection}` }) : null,
     kind === "kanji" && it.confusable?.length ? h("div", { class: "hint" }, "헷갈리는 읽기 ", it.confusable.map(c => h("span", { class: "x-read", lang: "ja", text: `✕ ${c}` }))) : null,
     kind === "words" && it.usage ? h("div", { class: "hint", lang: "ja", text: it.usage }) : null,
-    it.example ? h("div", { class: "flash-ex", lang: "ja" }, h("span", { text: it.example }), speakBtn(it.example, "예문")) : null,
+    it.example ? h("div", { class: "flash-ex", lang: "ja" }, h("span", null, glossNodes(it.example, glossOf(it.gloss, true, "기본 단어장", { ruby: true }))), speakBtn(it.example, "예문")) : null,
     it.exampleKo ? h("div", { class: "hint", text: it.exampleKo }) : null].filter(Boolean);
 }
 /* 끌어서 넘기기: 가로로 90px 넘게 끌면 넘김, 아니면 제자리 */
@@ -1519,6 +1546,14 @@ async function restoreMyCard({ id, prev }){
   else { cards = cards.filter(x => x.id !== id); cardIds.delete(id); await db.del("cards", id).catch(() => {}); }
 }
 
+/* 시험 문항(답한 뒤)의 단어 탭: 그 단어·문법 항목의 예문 gloss + 표제어 */
+function testGloss(id, on = true){
+  const e = vocabCache.get(id); if (!e || !on) return null;
+  const head = e.kind === "grammar" ? null : { w: e.it.word, r: e.it.reading, m: e.it.meaning };
+  return glossOf([...(e.it.gloss || []), ...(head ? [head] : [])], true, "오늘의 시험");
+}
+const promptNodes = (q, on) => q.type === "word" ? [q.prompt] : glossNodes(q.prompt, testGloss(q.id, on));
+
 /* 오늘의 시험: 단어 20(뜻 고르기·읽기 고르기·한국어 보고 단어 고르기) + 문법 5(예문 패턴 빈칸) */
 let testState = null;                              // { day, qs, pos, done }
 const shuffleArr = a => { for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -1593,7 +1628,7 @@ async function renderTest(v){
     h("span", { class: "tag", text: q.deck === "grammar" ? "문법" : { meaning: "뜻 고르기", reading: "읽기 고르기", word: "단어 고르기" }[q.type] }))));
   const box = h("section", { class: "panel stack test-q" },
     h("div", { class: "hint", text: q.ask }),
-    h("div", { class: "test-prompt" + (q.type === "grammar" ? " sent" : ""), lang: q.jaPrompt ? "ja" : null, text: q.prompt }),
+    h("div", { class: "test-prompt" + (q.type === "grammar" ? " sent" : ""), lang: q.jaPrompt ? "ja" : null }, promptNodes(q, q.sel != null)),
     h("ol", { class: "choices" }, q.choices.map((c, i) => {
       const done = q.sel != null, cls = "choice" + (done && i === q.answer ? " right" : done && i === q.sel ? " wrongpick" : "");
       return h("li", null, h("button", { class: cls, disabled: done, "aria-pressed": String(q.sel === i), onclick: () => { q.sel = i; renderCards(); } },
@@ -1698,7 +1733,7 @@ async function renderReport(){
       for (const q of t.items){
         const ok = q.sel === q.answer;
         ol.append(h("li", { class: ok ? null : "ng" },
-          h("div", { class: "rq" }, h("span", { class: "mark", text: ok ? "○" : "✕" }), h("span", { lang: q.type === "word" ? null : "ja", text: q.prompt }), h("span", { class: "hint", text: ` ${q.ask?.split(" · ")[0] || ""}` })),
+          h("div", { class: "rq" }, h("span", { class: "mark", text: ok ? "○" : "✕" }), h("span", { lang: q.type === "word" ? null : "ja" }, promptNodes(q, true)), h("span", { class: "hint", text: ` ${q.ask?.split(" · ")[0] || ""}` })),
           h("div", { class: "ra" }, h("span", { text: "정답 " }), h("b", { lang: "ja", text: q.choices[q.answer] }),
             ok ? null : h("span", { class: "my" }, " · 내 답 ", h("s", { lang: "ja", text: q.sel == null ? "–" : q.choices[q.sel] })))));
       }
@@ -1887,9 +1922,9 @@ function keigoCards(){
       h("div", { class: "card-top" }, h("span", { class: "tag", lang: "ja", text: SCENES[c.scene] }), h("b", { class: "sit", text: c.sit }),
         starBtn("keigo", { word: c.jp, meaning: c.sit, note: c.note + (c.ng ? ` ✕ ${c.ng}` : "") }, source)),
       hidden ? h("div", { class: "hint", text: "탭해서 표현 보기" }) : h("div", { class: "card-body" },
-        h("div", { class: "kg-jp", lang: "ja", text: c.jp }),
+        h("div", { class: "kg-jp", lang: "ja" }, glossNodes(c.jp, glossOf(glossExtra.keigo?.[c.id]?.jp, true, source)), speakBtn(c.jp, "표현")),
         h("div", { text: c.note }),
-        c.ng ? h("div", { class: "kg-ng" }, h("span", { class: "x", text: "✕" }), h("span", { class: "jp", lang: "ja", text: c.ng }), c.ngWhy ? h("span", { class: "why", text: c.ngWhy }) : null) : null)));
+        c.ng ? h("div", { class: "kg-ng" }, h("span", { class: "x", text: "✕" }), h("span", { class: "jp", lang: "ja" }, glossNodes(c.ng, glossOf(glossExtra.keigo?.[c.id]?.ng, true, source))), c.ngWhy ? h("span", { class: "why", text: c.ngWhy }) : null) : null)));
   }
   box.append(list);
   return box;
@@ -1952,7 +1987,8 @@ function answerItem(a){
 
   /* 답변 · 외우기 */
   const m = memo.get(a.id);
-  if (!m) body.append(h("p", { class: "ans-text", lang: "ja", text: a.text }));
+  body.append(h("p", { class: "ans-q", lang: "ja" }, glossNodes(a.question, glossOf(glossExtra.interview?.[a.question], true, "면접 질문") || dictGloss(a.question, "면접 질문"))));
+  if (!m) body.append(h("p", { class: "ans-text", lang: "ja" }, glossNodes(a.text, dictGloss(a.text, "면접 답변"))));
   else {
     const list = sentences(a.text);
     body.append(h("div", { class: "memo" }, list.map((s, i) => {
@@ -2038,7 +2074,7 @@ async function makeFollowups(a){
 function followupNode(a){
   const sec = h("div", { class: "fu-box" }, h("div", { class: "label", text: "예상 꼬리 질문" }));
   if (a.followups?.items.length) sec.append(h("ol", { class: "fu" }, a.followups.items.map(f => h("li", null,
-    h("div", { class: "fu-q", lang: "ja", text: f.q }),
+    h("div", { class: "fu-q", lang: "ja" }, glossNodes(f.q, dictGloss(f.q, "면접 꼬리 질문"))),
     f.ko ? h("div", { class: "hint", text: f.ko }) : null,
     f.intent ? h("div", { class: "fu-n" }, h("b", { text: "의도 " }), f.intent) : null,
     f.point ? h("div", { class: "fu-n" }, h("b", { text: "답변 포인트 " }), f.point) : null,
@@ -2063,6 +2099,11 @@ async function renderSettings(){
     h("div", { class: "chips" }, DAILY_OPTIONS.map(m => h("button", { class: "chip", type: "button", "aria-pressed": String((settings.dailyMin || 60) === m),
       onclick: () => { settings.dailyMin = m; savePrefs(); renderSettings(); toast(`하루 ${m}분으로 오늘 계획을 다시 짰어요`); } }, `${m}분`))),
     h("p", { class: "hint", text: `홈의 '오늘의 학습'을 이 시간에 맞춰 나눠요: 새 단어 ${NEW_CARDS[settings.dailyMin || 60].words}개 · 문법 ${NEW_CARDS[settings.dailyMin || 60].grammar}개 + 복습할 문제 먼저 + 정답률 낮은 파트에 더 많이. (30분: 단어 15·문법 3, 60분: 25·5, 90분: 35·7)` })));
+  /* 예문 후리가나: gloss 단어 위 읽기 */
+  v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "예문 후리가나" }),
+    h("div", { class: "chips" }, [["off", "끔"], ["main", "주요 단어만"]].map(([k, label]) => h("button", { class: "chip", type: "button", "aria-pressed": String((settings.furigana || "main") === k),
+      onclick: () => { settings.furigana = k; savePrefs(); renderSettings(); } }, label))),
+    h("p", { class: "hint", text: "주요 단어만: 예문·해설·지문(다 푼 뒤)에서 점선 밑줄 단어 위에 읽기를 붙여요. 카드 뒷면은 항상 보이고, 카드 앞면과 아직 안 푼 문제에는 붙이지 않아요." })));
   /* 보기 설정 */
   const early = h("input", { id: "study-early", type: "checkbox", onchange: e => { settings.studyEarly = e.target.checked; savePrefs(); } });
   early.checked = !!settings.studyEarly;
@@ -2452,7 +2493,7 @@ async function boot(){
   const dd = ddayNum();
   $("dday").append(h("span", { text: "시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
 
-  await Promise.all([loadIndex(), loadVocabIndex(), loadExam(), loadRank()]);
+  await Promise.all([loadIndex(), loadVocabIndex(), loadExam(), loadRank(), loadGlossExtra()]);
   applyReserve();                                      // 기기 저장소를 못 열어도 예약 문제는 빼 둔다
   try {
     await loadAll();

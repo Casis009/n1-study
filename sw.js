@@ -4,14 +4,14 @@
  * 문제은행·기본 단어장(data/bank, data/vocab의 index.json에 적힌 파일)도 설치 때 캐시해서 오프라인에서 풀 수 있게 한다.
  * 앱 파일이나 문제은행을 고치면 VERSION을 올려야 사용자 기기에 새 버전이 반영된다.
  */
-const VERSION = "n1-study-v81";
+const VERSION = "n1-study-v82";
 const FIREBASE_SDK = "/firebasejs/12.19.0/";                // src/sync.js의 SDK 버전과 같게
 const SHELL = [
   "./", "./index.html", "./manifest.webmanifest",
   "./src/styles.css", "./src/main.js", "./src/dom.js", "./src/db.js", "./src/sets.js",
   "./src/prompt.js", "./src/gemini.js", "./src/kinds.js", "./src/samples.js", "./src/interview.js", "./src/keigo.js", "./src/bank.js", "./src/vocab.js", "./src/furigana.js", "./src/tts.js", "./src/exam.js", "./src/daily.js", "./src/firebase-config.js", "./src/sync.js",
   "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./icons/apple-touch-icon.png",
-  "./data/bank/index.json", "./data/vocab/index.json", "./data/exam.json", "./data/exam-reserve.json", "./data/vocab/rank.json"
+  "./data/bank/index.json", "./data/vocab/index.json", "./data/exam.json", "./data/exam-reserve.json", "./data/vocab/rank.json", "./data/gloss-extra.json"
 ];
 async function cacheData(c){   // 문제은행·기본 단어장: index.json에 적힌 파일만 (아직 없는 유형 때문에 설치가 실패하지 않게)
   for (const dir of ["./data/bank/", "./data/vocab/"]){

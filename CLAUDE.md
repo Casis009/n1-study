@@ -32,6 +32,7 @@ src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱
 src/gemini.js          Gemini REST 호출, 하루 호출 수 카운터, 한도 초기화 시각
 src/db.js              IndexedDB 래퍼(동기화 대상 행에 _u 표시·outbox·tombs), 백업 내보내기/불러오기, 영구 저장 요청
+data/gloss-extra.json  경어 카드·면접 예시 질문의 gloss(코드 안 문장용)
 src/sync.js            기기 간 동기화(구글 로그인 + Firestore). 로그인한 적이 있을 때만 동적 import, SDK는 gstatic 12.19.0 고정
 src/firebase-config.js Firebase 웹 설정(공개돼도 되는 식별값). 비우면 계정 메뉴에 "설정 필요"
 firestore.rules        Firestore 보안 규칙(본인 uid만). 콘솔 붙여 넣기는 README "기기 간 동기화"
@@ -91,6 +92,7 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 - 동기화: 새 스토어를 만들면 동기화할지 정해서 db.js SYNC_STORES에 넣는다. 설정을 동기화하려면 main.js SYNC_PREF_KEYS에(API 키·읽기 음성은 절대 넣지 않음). Firebase SDK 버전을 바꾸면 src/sync.js import 주소와 sw.js FIREBASE_SDK를 같이.
 - 문제은행을 고치면 `tools/check-bank.mjs` 오류 0을 확인하고 docs/bank-plan.md 진행 현황을 갱신.
 - 기본 단어장 문법 `pattern`은 문제은행 `patternTags`와 같은 표기. 단어장을 고치면 `tools/check-vocab.mjs` 오류 0·patternTags 누락 경고 0 확인.
+- 단어 탭(gloss)·예문 후리가나: 앱의 모든 일본어 문장은 gloss로 탭할 수 있어야 한다. 문제은행·단어장은 각자 gloss, 코드 안 문장(경어 카드·면접 예시 질문)은 data/gloss-extra.json(`tools/fill-gloss.mjs --extra`는 빈 문장만 자동, 나머지는 직접), 사용자가 입력한 문장·설명 속 일본어는 앱이 기본 단어장 표제어와 일치하는 단어만 탭(dictGloss). check-vocab이 gloss-extra 누락·불일치를 오류로 잡는다. 후리가나는 gloss 단어 위 ruby(설정 "예문 후리가나", 카드 뒷면은 항상, 카드 앞면·안 푼 문제는 없음).
 - 문법 예문의 오늘의 시험 빈칸은 자동으로 찾는다(tools/grammar-blank.mjs). 활용이 커서 못 찾으면 check-vocab이 경고 → 그 항목에 `"blank": "예문 속 패턴 부분"`을 직접 쓴다(예: 〜めく → "めいて").
 - 남은 작업 순서와 다음 시작 지점은 docs/bank-plan.md "전체 작업 순서"에 있다.
 - 외부 라이브러리 없이 유지(오프라인 캐시가 단순해짐). 필요하면 이유를 남길 것.

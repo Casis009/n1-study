@@ -105,6 +105,28 @@ if (existsSync(BANK)) for (const f of readdirSync(BANK).filter(f => f.endsWith("
   if (missing.size) warns.push(`문제은행 ${f}의 patternTags가 단어장에 없음: ${[...missing].join(" ")}`);
 }
 
+/* 코드 안 문장(경어 카드·면접 예시 질문)의 단어 탭: data/gloss-extra.json. 한자가 있는 문장인데 gloss가 없으면 오류 */
+{
+  const { KEIGO } = await import("../src/keigo.js");
+  const { CATS } = await import("../src/interview.js");
+  const EXTRA = new URL("../data/gloss-extra.json", import.meta.url);
+  let x = null;
+  try { x = JSON.parse(readFileSync(EXTRA, "utf8")); } catch (e){ errors.push(`gloss-extra.json 읽기 실패: ${e.message}`); }
+  const needs = t => /[一-龯々]/.test((t || "").replace(/[〇△□]/g, ""));
+  const checkList = (at, text, list) => {
+    if (!Array.isArray(list)){ errors.push(`gloss-extra ${at}: gloss 없음(tools/fill-gloss.mjs --extra 후 직접 채우기)`); return; }
+    if (!list.length && needs(text)) errors.push(`gloss-extra ${at}: 한자가 있는 문장인데 gloss가 비어 있음「${text}」`);
+    for (const g of list){
+      if (!g?.w || !text.includes(g.w)) errors.push(`gloss-extra ${at}: 「${g?.w}」가 문장에 없음`);
+      else if (!/^[ぁ-ゖァ-ヺー・]+$/.test(g.r || "") || !hangul(g.m)) errors.push(`gloss-extra ${at}: 「${g.w}」 읽기/뜻 누락`);
+    }
+  };
+  if (x){
+    for (const c of KEIGO){ const e = x.keigo?.[c.id]; checkList(`keigo ${c.id} jp`, c.jp, e?.jp); if (c.ng) checkList(`keigo ${c.id} ng`, c.ng, e?.ng); }
+    for (const cat of CATS) for (const q of cat.questions) checkList(`interview「${q.slice(0, 12)}…」`, q, x.interview?.[q]);
+  }
+}
+
 if (warns.length) console.log(`\n경고 ${warns.length}\n  ` + warns.join("\n  "));
 if (errors.length){ console.log(`\n오류 ${errors.length}\n  ` + errors.join("\n  ")); console.log("\nindex.json을 쓰지 않았어요."); process.exit(1); }
 if (process.argv.includes("--strict") && warns.length){ console.log("\n경고도 0이어야 해요(--strict)."); process.exit(1); }

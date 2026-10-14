@@ -1,5 +1,6 @@
 // 단어 탭(gloss) 자동 채우기: ex.kanji와 기본 단어장(kanji/words) 표제어 중 문장에 그대로 나온 단어를 gloss로 넣는다.
-// 사용: node --no-warnings tools/fill-gloss.mjs [유형키...] [--vocab] [--dry]
+// 사용: node --no-warnings tools/fill-gloss.mjs [유형키...] [--vocab] [--extra] [--dry]
+//   --extra: 경어 카드·면접 예시 질문(코드 안 문장) gloss를 data/gloss-extra.json에
 //   유형키를 주면 그 파일만, 안 주면 문제은행 전부. --vocab은 기본 단어장 예문 gloss도. --dry는 쓰지 않고 집계만.
 // 규칙: 이미 있는 gloss는 그대로 두고 덧붙이기만 한다(여러 번 돌려도 같음). 문장당(지문은 단락당) 최대 8개.
 //   1순위 그 문항의 ex.kanji(지문은 그 단위 문항들의 ex.kanji), 2순위 전체 사전(모든 ex.kanji + 단어장 표제어, 2글자 이상).
@@ -112,6 +113,40 @@ if (withVocab){
   added += n;
   console.log(`vocab/grammar  +${n}`);
   if (!dry && n) writeJson(u, data);
+}
+
+/* --extra: 코드 안 데이터(경어 카드 src/keigo.js, 면접 예시 질문 src/interview.js)의 gloss → data/gloss-extra.json
+ * { keigo: { 카드id: { jp: [gloss], ng: [gloss] } }, interview: { 질문 문장: [gloss] } }. 이미 있는 항목은 두고 덧붙이기만. */
+if (args.includes("--extra")){
+  const { KEIGO } = await import("../src/keigo.js");
+  const { CATS } = await import("../src/interview.js");
+  const EXTRA = new URL("../data/gloss-extra.json", import.meta.url);
+  const data = existsSync(EXTRA) ? readJson(EXTRA) : {};
+  data._comment = "tools/fill-gloss.mjs --extra가 채우고, 모자란 것은 직접 쓴다. 코드 안 문장(경어 카드·면접 예시 질문)의 단어 탭 gloss. 검사: check-vocab";
+  data.keigo ||= {}; data.interview ||= {};
+  /* 사전 보강: 문제은행 gloss(문장에 나온 그대로의 표기)도 낮은 순위 후보로 */
+  const bankGloss = [];
+  for (const d of banks.values()) for (const u of d.units){ for (const g of u.passageGloss || []) bankGloss.push(g); for (const q of u.questions) for (const g of q.gloss || []) bankGloss.push(g); }
+  const extraCands = [...new Map(bankGloss.filter(usable).map(g => [g.w, { w: g.w, r: g.r, m: g.m }])).values()];
+  /* 이미 gloss가 있는 문장(직접 쓴 것)은 건드리지 않는다: 자동은 簡単に 속 「単に」처럼 단어 경계를 틀릴 수 있어서 빈 문장만 채운다 */
+  const fillX = (list, text) => { if (!list.length){ fill(list, [text], []); fill(list, [text], extraCands); } return list; };
+  let n = 0;
+  for (const c of KEIGO){
+    const e = data.keigo[c.id] ||= { jp: [], ng: [] };
+    const b = e.jp.length + e.ng.length;
+    fillX(e.jp, c.jp); if (c.ng) fillX(e.ng, c.ng);
+    n += e.jp.length + e.ng.length - b;
+    if (!e.jp.length && hasKanji(c.jp.replace(/[〇△]/g, ""))) weak.push(`keigo ${c.id} jp 0개: ${c.jp}`);
+    if (c.ng && !e.ng.length && hasKanji(c.ng.replace(/[〇△]/g, ""))) weak.push(`keigo ${c.id} ng 0개: ${c.ng}`);
+  }
+  for (const cat of CATS) for (const q of cat.questions){
+    const list = data.interview[q] ||= [], b = list.length;
+    fillX(list, q); n += list.length - b;
+    if (!list.length && hasKanji(q)) weak.push(`interview 0개: ${q}`);
+  }
+  added += n;
+  console.log(`gloss-extra    +${n}`);
+  if (!dry) writeJson(EXTRA, data);
 }
 
 console.log(`\n추가 ${added}개${dry ? " (--dry: 쓰지 않음)" : ""} · 사전 ${dict.size}개`);

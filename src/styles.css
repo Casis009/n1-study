@@ -492,3 +492,5 @@ body:not(.at-home) #sync-badge{display:none}
 .vt-ans{font-size:14px}
 .vt-ans b{font-family:var(--mincho);font-size:16px;color:var(--ok)}
 .vt-ans s{font-family:var(--mincho);color:var(--ng)}
+.ans-q{margin:0;font:600 15.5px/1.8 var(--mincho)}
+.gl ruby rt{font-size:.5em}
