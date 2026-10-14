@@ -16,7 +16,9 @@ import { db as localDb, syncDb, SYNC_STORES, trackSync, rowTime } from "./db.js"
 const LS = { uid: "n1.sync.uid", pull: uid => `n1.sync.pull.${uid}`, last: "n1.sync.last", prefsPushed: uid => `n1.sync.prefs.${uid}` };
 const ls = { get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set(k, v){ try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 const docId = key => encodeURIComponent(String(key));
-const BATCH = 400;
+/* 한 번에 올리는 묶음: 문서 400개 또는 약 3MB까지(Firestore 요청 한도 10MB). 문서 하나는 1MB 한도라 900KB 넘는 행은 건너뛰고 콘솔에 남긴다 */
+const BATCH = 400, BATCH_BYTES = 3 * 1024 * 1024, DOC_MAX = 900 * 1024;
+const bytes = str => new Blob([str]).size;
 
 let auth, fs, user = null, opts, running = null, again = false, timer = null;
 const state = { status: "signedout", email: "", lastSync: ls.get(LS.last, null), error: "" };
@@ -44,7 +46,10 @@ export async function initSync(config, o){
     ls.set(LS.uid, u.uid);
     trackSync(true, schedule);
     set({ status: "syncing", email: u.email || "" });
-    if (first){ ls.set(LS.pull(u.uid), {}); await syncDb.enqueueAll(); }
+    if (first){
+      try { ls.set(LS.pull(u.uid), {}); await syncDb.enqueueAll(); }
+      catch (e){ console.warn("[sync]", e); ls.set(LS.uid, null); set({ status: "error", error: `처음 합치기 준비 오류 (${e?.name || ""}): ${e?.message || e}` }); return; }
+    }
     syncNow();
   });
   window.addEventListener("online", () => syncNow());
@@ -92,7 +97,9 @@ export async function syncNow(){
       if (changed.size) await opts.onPulled?.(changed);
     } catch (e){
       console.warn("[sync]", e);
-      set({ status: navigator.onLine ? "error" : "offline", error: e?.code === "permission-denied" ? "권한이 없어요. Firestore 규칙(firestore.rules)을 콘솔에 붙여 넣었는지 확인하세요." : (e?.message || "동기화 오류") });
+      const code = e?.code || e?.name || "";        // 화면에 코드까지 보여서 원인을 알 수 있게
+      set({ status: navigator.onLine ? "error" : "offline", error: code === "permission-denied" ? "권한이 없어요. Firestore 규칙(firestore.rules)을 콘솔에 붙여 넣었는지 확인하세요."
+        : `동기화 오류${code ? ` (${code})` : ""}: ${e?.message || e}` });
     } finally {
       running = null;
       if (again){ again = false; syncNow(); }
@@ -103,25 +110,32 @@ export async function syncNow(){
 
 const col = store => collection(fs, "users", user.uid, store);
 async function push(){
-  const entries = await syncDb.outbox();
-  for (let i = 0; i < entries.length; i += BATCH){
-    const part = entries.slice(i, i + BATCH), b = writeBatch(fs), sent = [];
-    for (const e of part){
-      if (!SYNC_STORES.includes(e.store)){ sent.push(e); continue; }
-      const row = await localDb.get(e.store, e.key);
-      const ref = doc(col(e.store), docId(e.key));
-      if (row){
-        if (e.store === "exams" && !row.result){ sent.push(e); continue; }
-        b.set(ref, { k: String(e.key), j: JSON.stringify(row), u: rowTime(row), s: serverTimestamp(), del: false });
-      } else {
-        const t = await syncDb.tomb(e.store, e.key);
-        b.set(ref, { k: String(e.key), j: "", u: t?._u || Date.now(), s: serverTimestamp(), del: true });
-      }
-      sent.push(e);
+  const entries = await syncDb.outbox(), skipped = [];
+  let b = writeBatch(fs), n = 0, size = 0, sent = [];
+  const flush = async () => {
+    if (n) await b.commit();
+    if (sent.length) await syncDb.done(sent);
+    b = writeBatch(fs); n = 0; size = 0; sent = [];
+  };
+  for (const e of entries){
+    if (!SYNC_STORES.includes(e.store)){ sent.push(e); continue; }
+    const row = await localDb.get(e.store, e.key);
+    let data;
+    if (row){
+      if (e.store === "exams" && !row.result){ sent.push(e); continue; }
+      data = { k: String(e.key), j: JSON.stringify(row), u: rowTime(row), del: false };
+    } else {
+      const t = await syncDb.tomb(e.store, e.key);
+      data = { k: String(e.key), j: "", u: t?._u || Date.now(), del: true };
     }
-    await b.commit();
-    await syncDb.done(sent);
+    const sz = bytes(data.j) + 200;
+    if (sz > DOC_MAX){ skipped.push(`${e.store}/${e.key}`); sent.push(e); continue; }
+    if (n >= BATCH || size + sz > BATCH_BYTES) await flush();
+    b.set(doc(col(e.store), docId(e.key)), { ...data, s: serverTimestamp() });
+    n++; size += sz; sent.push(e);
   }
+  await flush();
+  if (skipped.length) console.warn("[sync] 너무 커서 건너뜀", skipped);
   await pushPrefs();
 }
 async function pull(){

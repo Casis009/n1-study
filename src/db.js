@@ -90,11 +90,12 @@ export const db = {
   put: (store, value) => tx(stores(store), "readwrite", s => { const st = s[store] || s; const ch = SYNCED.has(store) && stamp(store, [value], s); st.put(value); return ch; }).then(notify),
   putMany: (store, values) => tx(stores(store), "readwrite", s => { const st = s[store] || s; const ch = SYNCED.has(store) && stamp(store, values, s); for (const v of values) st.put(v); return ch; }).then(notify),
   del: (store, id) => tx(stores(store), "readwrite", s => { const st = s[store] || s; st.delete(id); return SYNCED.has(store) && tomb(store, [id], s); }).then(notify),
-  clear: store => tx(stores(store), "readwrite", async s => {
+  clear: store => tx(stores(store), "readwrite", s => {
     const st = s[store] || s;
-    const keys = SYNCED.has(store) && tracking ? await wrap(st.getAllKeys()) : [];
-    st.clear();
-    return SYNCED.has(store) && tomb(store, keys, s);
+    if (!(SYNCED.has(store) && tracking)){ st.clear(); return false; }
+    const req = st.getAllKeys();                    // 트랜잭션 안에서는 await 대신 콜백(Safari는 await 사이에 트랜잭션을 닫는다)
+    req.onsuccess = () => { tomb(store, req.result, s); st.clear(); };
+    return true;
   }).then(notify),
 };
 
@@ -102,16 +103,19 @@ export const db = {
 export const syncDb = {
   outbox: () => tx("outbox", "readonly", s => wrap(s.getAll())),
   /* 올린 뒤: 그사이 다시 바뀌지 않았으면(at 같음) 지운다 */
-  done: entries => tx("outbox", "readwrite", async s => {
-    for (const e of entries){ const cur = await wrap(s.get(e.id)); if (cur && cur.at === e.at) s.delete(e.id); }
+  done: entries => tx("outbox", "readwrite", s => {
+    for (const e of entries){ const req = s.get(e.id); req.onsuccess = () => { if (req.result && req.result.at === e.at) s.delete(e.id); }; }
   }),
   tomb: (store, key) => tx("tombs", "readonly", s => wrap(s.get(okey(store, key)))),
   /* 처음 로그인(합치기): 기기의 모든 행을 올릴 목록에 */
-  enqueueAll: () => tx(["outbox", "tombs", ...SYNC_STORES], "readwrite", async s => {
+  enqueueAll: () => tx(["outbox", "tombs", ...SYNC_STORES], "readwrite", s => {
     const now = Date.now();
-    for (const store of SYNC_STORES) for (const v of await wrap(s[store].getAll()))
-      if (uploadable(store, v)) s.outbox.put({ id: okey(store, v.id), store, key: v.id, at: now });
-    for (const t of await wrap(s.tombs.getAll())) s.outbox.put({ id: t.id, store: t.store, key: t.key, at: now });
+    for (const store of SYNC_STORES){
+      const req = s[store].getAll();
+      req.onsuccess = () => { for (const v of req.result) if (uploadable(store, v)) s.outbox.put({ id: okey(store, v.id), store, key: v.id, at: now }); };
+    }
+    const tr = s.tombs.getAll();
+    tr.onsuccess = () => { for (const t of tr.result) s.outbox.put({ id: t.id, store: t.store, key: t.key, at: now }); };
   }),
   /* 클라우드에서 온 값 반영: row가 있으면 저장, 없으면(삭제) 지우고 삭제 표시를 그 시각으로 */
   apply: (store, key, row, u) => tx([store, "tombs"], "readwrite", s => {
