@@ -14,7 +14,7 @@ import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, recordExamUnits, qPerUnit } from "./bank.js";
-import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, addDays, streak } from "./daily.js";
+import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, addDays, streak, mergeDaily } from "./daily.js";
 import { EXAM_CFG, loadExam, examRounds, reservedIds, buildSection, sectionMinutes, scoreExam } from "./exam.js";
 import { hasKanji, rubyParts } from "./furigana.js";
 import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, RATE_LABEL, speakerSplit } from "./tts.js";
@@ -1305,7 +1305,7 @@ function todayDeck(deck, row = todayRow()){
     const newIds = [...new Set([...wrongFirst, ...fresh].map(x => x[0]))].slice(0, nNew);
     const carry = prevTestWrong(today).filter(id => ids.has(id));
     const due = [...vcards.values()].filter(r => r.deck === deck && cardDue(r.id, today)).sort((a, b) => a.dueDay.localeCompare(b.dueDay)).map(r => r.id);
-    row.cards[deck] = { ids: [...new Set([...carry, ...newIds, ...due])], newIds, swiped: [] };
+    row.cards[deck] = { ids: [...new Set([...carry, ...newIds, ...due])], newIds, swiped: [], createdAt: Date.now() };
     db.put("daily", row).catch(() => {});
   }
   return row.cards[deck];
@@ -2144,6 +2144,7 @@ function loadSync(){
   if (!syncLoading) syncLoading = import("./sync.js").then(m => m.initSync(firebaseConfig, {
     onState: s => { syncState = s; paintSyncBadge(); if (route.name === "account") renderAccount(); },
     onPulled: async () => { await loadAll(); render(); renderNoteCount(); },
+    merge: { daily: mergeDaily },                   // 같은 날짜의 오늘 학습은 덮어쓰지 않고 합친다(덱·넘긴 카드·시험)
     getPrefs: () => ({ u: prefs.get("n1.prefsU", 0), values: syncedPrefs() }),
     applyPrefs: (values, u) => {
       for (const k of SYNC_PREF_KEYS) if (k in values) settings[k] = values[k];

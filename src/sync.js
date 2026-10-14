@@ -4,6 +4,7 @@
  * 클라우드: users/{uid}/{스토어}/{문서}  문서 = { k: 원래 id, j: 행 JSON 문자열, u: 바꾼 시각(ms, 기기 시계), s: 서버 받은 시각, del: 삭제 표시 }
  *          users/{uid}/prefs/app        설정(하루 학습 시간 등. API 키·읽기 음성 제외) { j, u, s }
  * 순서: 올리기(outbox) → 내려받기(스토어마다 s > 마지막으로 받은 시각) → 합치기(u가 더 최근인 쪽이 이김, del이면 기기에서도 지움)
+ *       단 opts.merge에 있는 스토어(daily)는 양쪽 다 있으면 통째로 덮지 않고 합친다(mergeDaily).
  * 처음 로그인(이 기기에서 이 uid로 처음): 기기 행 전부를 올릴 목록에 넣고, 클라우드 전체를 받아 합친다. 어느 쪽도 지우지 않는다.
  * 행을 JSON 문자열로 넣는 이유: Firestore는 배열 안의 배열·undefined를 못 받는다. 가장 큰 행(모의고사)도 약 200KB라 문서 한도 1MB 안.
  * SDK는 gstatic 공식 CDN, 버전 고정(바꿀 때는 sw.js의 FIREBASE_SDK도 같이).
@@ -168,6 +169,8 @@ async function push(){
 }
 async function pull(){
   const marks = ls.get(LS.pull(user.uid), {}), changed = new Set();
+  /* daily 합치기를 넣기 전에 따로 만들어진 같은 날짜 행도 합치도록 한 번은 처음부터 받는다 */
+  if (!ls.get(`n1.sync.mergev1.${user.uid}`, false)){ marks.daily = 0; ls.set(`n1.sync.mergev1.${user.uid}`, true); }
   for (const store of SYNC_STORES){
     stage = "받기 " + store;
     const since = marks[store] || 0;
@@ -179,6 +182,14 @@ async function pull(){
       max = Math.max(max, r.s?.toMillis?.() || 0);
       const local = await localDb.get(store, key), t = await syncDb.tomb(store, key);
       const localU = Math.max(local ? rowTime(local) : 0, t?._u || 0);
+      /* 합치는 스토어(daily): 양쪽 다 있으면 시각과 상관없이 합치고, 기기 값이 바뀌면 다시 올린다 */
+      const merge = opts.merge?.[store];
+      if (merge && local && !r.del && !t){
+        let remote; try { remote = JSON.parse(r.j); } catch { continue; }
+        const merged = merge(local, remote), { _u: _a, ...m1 } = merged, { _u: _b, ...l1 } = local;
+        if (JSON.stringify(m1) !== JSON.stringify(l1)){ await localDb.put(store, merged); changed.add(store); }
+        continue;
+      }
       if (u <= localU) continue;                                   // 기기 쪽이 같거나 더 최근
       if (r.del){ if (local){ await syncDb.apply(store, key, null, u); changed.add(store); } else await syncDb.apply(store, key, null, u); continue; }
       let row; try { row = JSON.parse(r.j); } catch { continue; }

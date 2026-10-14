@@ -101,3 +101,30 @@ export function streak(doneDays, today = dayKey()){
   while (doneDays.has(d)){ n++; d = addDays(d, -1); }
   return n;
 }
+
+/*
+ * 기기 간 동기화에서 같은 날짜의 daily 행 합치기(통째로 덮어쓰지 않는다). 순서와 상관없이 같은 결과가 나오게.
+ * - 계획(plan): 하루 학습 시간이 다르면 나중에 정한 것(설정을 바꾼 것), 같으면 먼저 만든 것
+ * - 카드 덱: 먼저 만든 기기의 덱(ids·newIds)을 기준으로, 넘긴 기록(swiped)은 양쪽을 합침(덱에 있는 카드만, 같은 카드는 한 번)
+ * - 오늘의 시험: 있는 쪽, 둘 다면 먼저 본 것 / 완료 시각: 이른 쪽
+ */
+export function mergeDaily(a, b){
+  if (!a) return b; if (!b) return a;
+  const pa = a.planAt || 0, pb = b.planAt || 0;
+  const planFrom = a.plan && b.plan && a.plan.minutes !== b.plan.minutes ? (pa >= pb ? a : b) : (pa && (pa <= pb || !pb) ? a : b);
+  const out = { ...a, plan: planFrom.plan || a.plan || b.plan, planAt: planFrom.planAt || pa || pb, done: { ...(b.done || {}), ...(a.done || {}) } };
+  const cards = {};
+  for (const deck of new Set([...Object.keys(a.cards || {}), ...Object.keys(b.cards || {})])){
+    const x = a.cards?.[deck], y = b.cards?.[deck];
+    if (!x || !y){ cards[deck] = x || y; continue; }
+    const ka = x.createdAt || Infinity, kb = y.createdAt || Infinity;           // 먼저 만든 덱(시각이 같으면 ids 문자열 순)
+    const [base, other] = ka < kb || (ka === kb && JSON.stringify(x.ids) <= JSON.stringify(y.ids)) ? [x, y] : [y, x];
+    const inDeck = new Set(base.ids), seen = new Set(), swiped = [];
+    for (const s of [...base.swiped, ...other.swiped]) if (inDeck.has(s.id) && !seen.has(s.id)){ seen.add(s.id); swiped.push(s); }
+    cards[deck] = { ...base, swiped };
+  }
+  if (Object.keys(cards).length) out.cards = cards;
+  out.test = a.test && b.test ? (a.test.at <= b.test.at ? a.test : b.test) : (a.test || b.test || null);
+  out.completedAt = [a.completedAt, b.completedAt].filter(Boolean).sort((p, q) => p - q)[0] || null;
+  return out;
+}
