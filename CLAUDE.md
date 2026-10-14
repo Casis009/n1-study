@@ -25,7 +25,7 @@ sw.js                  오프라인 캐시(문제은행 포함). 앱 파일·문
 src/main.js            상태와 렌더링 전부 (탭별 render* 함수)
 src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제
 src/vocab.js           기본 단어장 로드·외웠어요(vocabDone)·틀리면 외웠어요 해제
-src/kinds.js           N1 1교시 12개 문제 유형 정의, 주제 목록, 시험일
+src/kinds.js           N1 1교시 12개 + 청해 3개 문제 유형 정의, 주제 목록, 시험일
 src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱
 src/gemini.js          Gemini REST 호출, 하루 호출 수 카운터, 한도 초기화 시각

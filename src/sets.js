@@ -13,24 +13,31 @@ function shuffleIdx(n){
   return a;
 }
 
+/* 청해 스크립트: [{ speaker: "M"|"F"|"N", text, ko }] */
+export const normalizeScript = v => arr(v).filter(l => l && asStr(l.text).trim())
+  .map(l => ({ speaker: ["M", "F", "N"].includes(l.speaker) ? l.speaker : "N", text: asStr(l.text), ko: asStr(l.ko) }));
+
 export function normalizeQ(q, oneBased){
   const choices = arr(q.choices).slice(0, 4).map(asStr);
-  if (choices.length !== 4 || !asStr(q.stem).trim()) return null;
+  const script = normalizeScript(q.script);
+  const n = choices.length;                                // 보통 4지선다, 청해 即時応答은 3지선다
+  if (n < (script.length ? 3 : 4) || (!asStr(q.stem).trim() && !script.length)) return null;
   let ans = q.answer;
   if (typeof ans === "string"){ const i = choices.indexOf(ans); ans = i >= 0 ? i : parseInt(ans, 10); }
   ans = Number(ans);
   if (oneBased) ans -= 1;
-  if (!Number.isInteger(ans) || ans < 0 || ans > 3) return null;
+  if (!Number.isInteger(ans) || ans < 0 || ans >= n) return null;
   const ex = q.ex || q.explanation || {};
   const notes = arr(ex.choiceNotes).map(asStr);
-  while (notes.length < 4) notes.push("");
-  const cko = arr(ex.choicesKo).slice(0, 4).map(c => ({ reading: asStr(c?.reading), ko: asStr(c?.ko) }));
-  while (cko.length < 4) cko.push({ reading: "", ko: "" });
+  while (notes.length < n) notes.push("");
+  const cko = arr(ex.choicesKo).slice(0, n).map(c => ({ reading: asStr(c?.reading), ko: asStr(c?.ko) }));
+  while (cko.length < n) cko.push({ reading: "", ko: "" });
   const tr = ex.translation || {};
   const tags = arr(q.patternTags).map(asStr).map(t => t.trim()).filter(Boolean).slice(0, 6);
   return {
     stem: asStr(q.stem), choices, answer: ans, patternTags: tags,
     ...(typeof q.unitId === "string" ? { unitId: q.unitId } : {}),
+    ...(script.length ? { script } : {}),
     gloss: normalizeGloss(q.gloss),
     ex: {
       translation: { full: asStr(tr.full), ko: asStr(tr.ko) },
@@ -39,7 +46,7 @@ export function normalizeQ(q, oneBased){
       kanji: arr(ex.kanji).filter(k => k && k.word).map(k => ({ word: asStr(k.word), reading: asStr(k.reading), meaning: asStr(k.meaning) })).slice(0, 10),
       grammar: arr(ex.grammar).filter(g => g && g.pattern).map(g => ({ pattern: asStr(g.pattern), reading: asStr(g.reading), meaning: asStr(g.meaning), example: asStr(g.example) })).slice(0, 5),
       compare: arr(ex.compare).filter(c => c && c.word).map(c => ({ word: asStr(c.word), reading: asStr(c.reading), meaning: asStr(c.meaning), note: asStr(c.note) })).slice(0, 5),
-      pattern: asStr(ex.pattern), tip: asStr(ex.tip), choiceNotes: notes.slice(0, 4)
+      pattern: asStr(ex.pattern), tip: asStr(ex.tip), choiceNotes: notes.slice(0, n)
     }
   };
 }
@@ -64,7 +71,7 @@ export function prepSet(raw, { shuffle = false, fallbackKind = "grammar_blank" }
   for (const q of questions){
     q.sel = null; q.checked = false; q.saved = false;
     if (shuffle){
-      const p = shuffleIdx(4);
+      const p = shuffleIdx(q.choices.length);
       q.choices = p.map(i => q.choices[i]);
       q.ex.choiceNotes = p.map(i => q.ex.choiceNotes[i]);
       q.ex.choicesKo = p.map(i => q.ex.choicesKo[i]);

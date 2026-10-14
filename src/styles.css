@@ -290,3 +290,19 @@ ruby rt{font:400 .52em/1 var(--sans);color:var(--muted);letter-spacing:0}
 .tts-help .gp-x{margin-left:auto;border:0;background:none;color:var(--muted);font-size:20px;line-height:1;padding:4px 8px}
 .tts-help p{margin:.45em 0 0}
 .tts-set select{max-width:100%}
+/* 청해 */
+.listen{display:grid;gap:8px;margin:6px 0 10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--paper)}
+.listen .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.listen .btn.off{opacity:.5}
+.listen .chips.lines{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.listen .chips.lines .chip{min-width:40px;min-height:34px}
+.listen-q{font-size:14px}
+.script{display:grid;gap:8px}
+.script .sl{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start}
+.script .who{font:600 12px var(--sans);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--muted);white-space:nowrap}
+.script .sp-M .who{color:var(--ai);border-color:var(--ai)}
+.script .sp-F .who{color:var(--ng);border-color:var(--ng)}
+.script .sl-body .jp{font-size:16px;line-height:1.8}
+.script .sl-body .ko{font-size:13.5px;color:var(--muted)}
+.passage.hearing{text-align:center;font-family:var(--sans);font-size:15px}
+.passage.hearing p{text-indent:0}

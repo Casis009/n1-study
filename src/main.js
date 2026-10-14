@@ -14,14 +14,14 @@ import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage } from "./bank.js";
 import { hasKanji, rubyParts } from "./furigana.js";
-import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES } from "./tts.js";
+import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, speakerSplit } from "./tts.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
 
-const GROUPS = ["문자·어휘", "문법", "독해"];
+const GROUPS = ["문자·어휘", "문법", "독해", "청해"];
 const NUM = ["①", "②", "③", "④"];
 
 /* ---------- state ---------- */
-const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "" }, prefs.get("n1.settings", {}));
+const settings = Object.assign({ key: "", model: DEFAULT_MODEL, studyEarly: false, ttsRate: 0.85, ttsVoice: "", listenMode: "exam" }, prefs.get("n1.settings", {}));
 setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice });
 const gen = Object.assign({ kind: "grammar_blank", count: 5, topic: "", weak: true }, prefs.get("n1.gen", {}));
 if (!KINDS[gen.kind]) gen.kind = "grammar_blank";
@@ -42,7 +42,7 @@ function toast(msg){
 async function ensurePersist(){ if (persist !== "granted") persist = await requestPersist(); }
 
 /* ---------- weak points: 패턴별 통계(tagStats)에서 틀린 횟수가 많은 순 ---------- */
-const weakTags = (vocab, limit) => tagList().filter(t => t.wrong > 0 && (t.group === "문자·어휘") === !!vocab).slice(0, limit);
+const weakTags = (vocab, limit) => tagList().filter(t => t.wrong > 0 && t.group !== "청해" && (t.group === "문자·어휘") === !!vocab).slice(0, limit);
 const fmtWhen = ts => {
   const hrs = Math.round((ts - Date.now()) / 3600000);
   if (hrs < 1) return "곧";
@@ -52,7 +52,7 @@ const fmtWhen = ts => {
 /* 모델 출력·내 문제를 검증하고 문제은행 단위로 나눈다(풀이용 필드는 뺀다). 형식이 틀리면 throw. */
 function cleanUnits(kind, raw){
   const set = prepSet(structuredClone({ ...raw, kind }), { fallbackKind: kind });
-  const questions = set.questions.map(({ stem, choices, answer, patternTags, gloss, ex }) => ({ stem, choices, answer, patternTags, gloss, ex }));
+  const questions = set.questions.map(({ stem, choices, answer, patternTags, gloss, ex, script }) => ({ stem, choices, answer, patternTags, gloss, ex, ...(script ? { script } : {}) }));
   return splitUnits(kind, { title: set.title, topic: set.topic, passage: set.passage, ...passageFields(set), questions });
 }
 
@@ -62,7 +62,7 @@ async function addNote(set, q){
   q.saved = true;
   const note = { id: set.id + "-" + set.questions.indexOf(q), at: Date.now(), kind: set.kind, title: set.title, passage: set.passage,
     ...passageFields(set),
-    q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [], gloss: q.gloss || [] } };
+    q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [], gloss: q.gloss || [], ...(q.script ? { script: q.script } : {}) } };
   notes = [note, ...notes.filter(n => n.id !== note.id)];
   await db.put("notes", note); ensurePersist();
   const undone = await undoDoneFor(questionKeys(q)).catch(() => 0);   // 외웠다고 체크한 항목을 다시 틀리면 되돌림
@@ -260,11 +260,23 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
   const wrap = h("div", { class: "study" });
   const open = always || on || settings.studyEarly;
   const st = studyState(o);
+  /* 먼저 듣기: 지문을 가린 채 전체를 읽고, 다 들으면(또는 멈추면) 지문을 보여 준다 */
+  const hearBtn = () => h("button", { class: "chip" + (ttsReady() ? "" : " off"), type: "button", onclick: () => {
+    if (!ttsReady()){ openTtsHelp(); return; }
+    const texts = hasStudy(o) ? o.sentences.map(s => s.ja) : o.passage.split(/\n+/).map(t => t.trim()).filter(t => t && !/^[AB]$/.test(t));
+    speak(texts, { onEnd: () => { st.hearing = false; st.paint?.(); } });
+    st.hearing = true; st.paint?.();
+  } }, "🎧 먼저 듣기");
   const paint = () => {
     const gl = glossOf(o.passageGloss, on || always, source);
     wrap.replaceChildren();
+    if (st.hearing){
+      wrap.append(h("div", { class: "passage hearing" }, h("p", { text: "🎧 듣는 중이에요. 다 들으면 지문이 보여요." }),
+        h("button", { class: "btn small", type: "button", onclick: () => stopSpeak() }, "■ 그만 듣고 지문 보기")));
+      return;
+    }
     if (!hasStudy(o)){                             // 예전 데이터·AI 문제: 지문 + 접어 둔 전체 번역
-      wrap.append(passageNode(o.passage, kind, gl), h("div", { class: "study-bar" }, readAllBtn(o, st, wrap)));
+      wrap.append(passageNode(o.passage, kind, gl), h("div", { class: "study-bar" }, readAllBtn(o, st, wrap), hearBtn()));
       if (open && o.passageKo?.trim()){
         const d = h("details", { class: "passage-ko" }, h("summary", { text: "지문 해석 보기" }));
         for (const para of o.passageKo.split(/\n+/).map(t => t.trim()).filter(Boolean)) d.append(h("p", { text: para }));
@@ -274,7 +286,7 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
     }
     const mode = k => open && st[k];
     wrap.append(studyPassage(o, kind, gl, { sent: mode("sent"), notes: mode("notes"), open: st.open, speaking: st.speaking }, i => { st.open.has(i) ? st.open.delete(i) : st.open.add(i); paint(); }));
-    const bar = h("div", { class: "study-bar" + (open ? "" : " locked") }, readAllBtn(o, st, wrap),
+    const bar = h("div", { class: "study-bar" + (open ? "" : " locked") }, readAllBtn(o, st, wrap), hearBtn(),
       STUDY_BTNS.map(([k, label]) => h("button", { class: "chip", type: "button", disabled: !open, "aria-pressed": String(mode(k)),
         onclick: () => { st[k] = !st[k]; paint(); } }, label)),
       open ? null : h("span", { class: "hint", text: "문제를 다 풀면 볼 수 있어요" }));
@@ -283,6 +295,7 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
     if (mode("full") && o.passageKo?.trim()) wrap.append(h("div", { class: "passage-ko full" },
       h("div", { class: "label", text: "전체 번역" }), o.passageKo.split(/\n+/).map(t => t.trim()).filter(Boolean).map(t => h("p", { text: t }))));
   };
+  st.paint = paint;                                // 다시 그려지면 최신 화면으로
   paint();
   return [wrap];
 }
@@ -364,6 +377,7 @@ function starBtn(type, item, source){
 function explanationNode(q, source){
   const ex = q.ex, box = h("div", { class: "ex" });
   if (q.patternTags?.length) box.append(h("div", { class: "ptags" }, h("span", { class: "hint", text: "패턴" }), q.patternTags.map(t => h("span", { class: "tag", lang: "ja", text: t }))));
+  if (q.script?.length) box.append(scriptNode(q, source));
   const tr = ex.translation || {};
   if (tr.full || tr.ko) box.append(h("section", null, h("h4", { text: "문제 해석" }),
     tr.full ? h("p", { class: "tr-jp", lang: "ja" }, h("span", { text: tr.full }), speakBtn(tr.full.replace(/★/g, ""), "완성 문장")) : null, tr.ko ? h("p", { text: tr.ko }) : null));
@@ -392,10 +406,71 @@ function explanationNode(q, source){
     h("ul", { class: "notes" }, ex.choiceNotes.map((t, i) => t ? h("li", { class: i === q.answer ? "isans" : null }, h("span", { class: "n", text: NUM[i] }), h("span", { text: t })) : null))));
   return box;
 }
+/* ---------- 청해: 재생 버튼만 보이고 스크립트는 정답 확인 뒤 ---------- */
+const SPEAKER = { M: "男", F: "女", N: "ナレーション" };
+const listenPaints = new Set();          // 화면에 있는 재생 상자들(재생 상태가 바뀌면 다시 그림)
+let listening = null;                    // { q, line } 지금 재생 중인 문제(line: 한 문장만 다시 듣기면 그 번호)
+const repaintListen = () => { for (const p of [...listenPaints]) p(); };
+/* 재생 목록: 대사(화자별 음성) + 即時応答은 대답 1~3도 상대 화자가 읽는다. 상황 설명·질문 뒤에는 잠깐 쉼 */
+function listenItems(q){
+  const s = q.script, items = s.map((l, i) => ({ text: l.text, speaker: l.speaker, pause: l.speaker === "N" && s[i + 1] && s[i + 1].speaker !== "N" ? 1500 : 350 }));
+  if (!q.stem.trim()){
+    const last = s[s.length - 1]?.speaker, resp = last === "F" ? "M" : "F";
+    items[items.length - 1].pause = 900;
+    q.choices.forEach((c, i) => items.push({ text: `${i + 1}、${c}`, speaker: resp, pause: 700 }));
+  }
+  return items;
+}
+function playListen(q, line = null){
+  if (!ttsReady()){ openTtsHelp(); return; }
+  if (listening?.q === q && listening.line === line){ stopSpeak(); return; }
+  const items = listenItems(q);
+  speak(line == null ? items : [items[line]], { onEnd: () => { if (listening?.q === q){ listening = null; repaintListen(); } } });
+  listening = { q, line };
+  if (line == null && !q.checked){ q.plays = (q.plays || 0) + 1; saveCurrent(); }
+  repaintListen();
+}
+function listenNode(q){
+  const box = h("div", { class: "listen" });
+  const paint = () => {
+    if (!box.isConnected && box.dataset.drawn){ listenPaints.delete(paint); return; }
+    box.dataset.drawn = "1";
+    const exam = settings.listenMode !== "practice" && !q.checked;
+    const playing = listening?.q === q && listening.line == null;
+    const used = exam && (q.plays || 0) >= 1 && !playing;
+    box.replaceChildren(
+      h("div", { class: "row" },
+        h("button", { class: "btn" + (playing ? "" : " primary") + (ttsReady() ? "" : " off"), type: "button", disabled: used, onclick: () => playListen(q) },
+          playing ? "■ 정지" : used ? "재생 끝 (실전 모드는 1번)" : (q.plays ? "▶ 다시 재생" : "▶ 재생")),
+        h("div", { class: "chips" }, [["exam", "실전 1번"], ["practice", "연습 반복"]].map(([m, label]) =>
+          h("button", { class: "chip", type: "button", "aria-pressed": String((settings.listenMode || "exam") === m),
+            onclick: () => { settings.listenMode = m; savePrefs(); repaintListen(); } }, label)))),
+      !exam && q.script.length > 1 ? h("div", { class: "chips lines" }, h("span", { class: "hint", text: "문장 다시 듣기" }),
+        listenItems(q).map((it, i) => h("button", { class: "chip", type: "button", "aria-pressed": String(listening?.q === q && listening.line === i),
+          title: SPEAKER[it.speaker] || "", onclick: () => playListen(q, i) }, `${i + 1}${it.speaker === "M" ? "男" : it.speaker === "F" ? "女" : ""}`))) : null,
+      exam && !q.checked ? h("p", { class: "hint", text: "실전 모드: 시험처럼 한 번만 들을 수 있어요. 연습 모드에서는 반복·문장별 다시 듣기가 돼요." }) : null);
+  };
+  listenPaints.add(paint);
+  paint();
+  return box;
+}
+/* 정답 확인 뒤: 화자별 스크립트 + 문장별 해석 + 단어 탭 + 문장 🔊 */
+function scriptNode(q, source){
+  const gl = glossOf(q.gloss, true, source);
+  return h("section", null, h("h4", { text: "스크립트" }), h("div", { class: "script" }, q.script.map(l =>
+    h("div", { class: "sl sp-" + l.speaker },
+      h("span", { class: "who", lang: "ja", text: SPEAKER[l.speaker] }),
+      h("div", { class: "sl-body" }, h("div", { class: "jp", lang: "ja" }, glossNodes(l.text, gl), speakBtn({ text: l.text, speaker: l.speaker }, "이 문장")),
+        l.ko ? h("div", { class: "ko", text: l.ko }) : null)))));
+}
 function questionNode(q, idx, ctx){
   const wrap = h("article", { class: "q" });
   const gl = glossOf(q.gloss, q.checked, ctx.source);   // 단어 탭은 정답 확인 뒤에만 (풀 때 힌트가 되지 않게)
-  wrap.append(h("div", { class: "q-stem" }, h("span", { class: "q-no", text: ctx.label || `問${idx + 1}` }), stemNode(q.stem, gl)));
+  const listen = !!q.script?.length, quick = listen && !q.stem.trim();   // 청해 / 即時応答(선택지도 음성)
+  const stem = listen && !q.checked ? h("div", { class: "jp listen-q hint", text: quick ? "🎧 짧은 말과 대답 1~3을 듣고 가장 알맞은 대답을 고르세요" : "🎧 질문은 음성으로 나와요. 들은 뒤 답을 고르세요" })
+    : quick ? h("div", { class: "jp listen-q", text: "即時応答" }) : stemNode(q.stem, gl);
+  wrap.append(h("div", { class: "q-stem" }, h("span", { class: "q-no", text: ctx.label || `問${idx + 1}` }), stem));
+  if (listen) wrap.append(listenNode(q));
   const list = h("ol", { class: "choices" });
   q.choices.forEach((c, i) => {
     let cls = "choice", verdict = null;
@@ -403,7 +478,7 @@ function questionNode(q, idx, ctx){
       if (i === q.answer){ cls += " right"; verdict = h("span", { class: "verdict ok", text: "정답" }); }
       else if (i === q.sel){ cls += " wrongpick"; verdict = h("span", { class: "verdict ng", text: "내 답" }); }
     }
-    const inner = [h("span", { class: "bubble", text: String(i + 1) }), h("span", { class: "jp", lang: "ja" }, glossNodes(c, gl)), verdict];
+    const inner = [h("span", { class: "bubble", text: String(i + 1) }), quick && !q.checked ? h("span", { class: "hint", text: "음성으로 들어요" }) : h("span", { class: "jp", lang: "ja" }, glossNodes(c, gl)), verdict];
     list.append(h("li", null, q.checked   // 확인 뒤에는 단어 탭 버튼을 넣을 수 있게 div로
       ? h("div", { class: cls + " done", "aria-pressed": String(q.sel === i) }, inner)
       : h("button", { class: cls, "aria-pressed": String(q.sel === i), onclick: () => { q.sel = i; ctx.onChange(); } }, inner)));
@@ -486,7 +561,8 @@ function renderSolve(){
   aiBody.append(actions, h("p", { class: "hint", text: "만든 문제는 이 기기의 문제은행에도 추가돼서 나중에 복습으로 다시 나와요." }));
   if (lastError) aiBody.append(h("div", { class: "status err", role: "alert", text: lastError }));
   ai.append(aiBody);
-  g.append(ai);
+  if (k.listen) g.append(h("p", { class: "hint", text: "청해는 문제은행으로만 연습해요(AI 생성 없음). 음성은 이 기기의 읽어주기(일본어 음성)를 써요." }));
+  else g.append(ai);
   g.append(h("div", { class: "hint" }, "예시 세트: ",
     ...[["vocab", "어휘 2문항"], ["grammar", "문법 3문항"], ["reading", "독해 단문"]].map(([key, label]) =>
       h("button", { class: "btn small ghost", onclick: () => { current = prepSet(structuredClone(SAMPLES[key])); saveCurrent(); renderSolve(); } }, label))));
@@ -568,7 +644,7 @@ function renderNote(){
       h("div", { class: "stemline", lang: "ja", text: n.q.stem.replace(/__/g, "") })));
     const body = h("div", { class: "note-body" });
     if (n.passage && n.passage.trim()) body.append(...passageBlock(n, n.kind, true, n.title, { always: true }));
-    const r = noteRetry.get(n.id) || { stem: n.q.stem, choices: n.q.choices, answer: n.q.answer, ex: n.q.ex, gloss: n.q.gloss || [], sel: n.q.mySel, checked: true };
+    const r = noteRetry.get(n.id) || { stem: n.q.stem, choices: n.q.choices, answer: n.q.answer, ex: n.q.ex, gloss: n.q.gloss || [], script: n.q.script, sel: n.q.mySel, checked: true };
     body.append(questionNode(r, 0, { label: "復習", source: n.title, onChange: () => { noteRetry.set(n.id, r); renderNote(); },
       extraActions: [
         h("button", { class: "btn small", onclick: () => { noteRetry.set(n.id, { ...r, sel: null, checked: false }); renderNote(); } }, "다시 풀기"),
@@ -1083,7 +1159,8 @@ function ttsSettings(){
     const sel = h("select", { id: "tts-voice", onchange: e => { settings.ttsVoice = e.target.value; save(); } },
       h("option", { value: "", text: "기본 일본어 음성" }), vs.map(v => h("option", { value: v.voiceURI, text: `${v.name}${v.localService ? "" : " (온라인)"}` })));
     sel.value = vs.some(v => v.voiceURI === settings.ttsVoice) ? settings.ttsVoice : "";
-    box.append(h("label", { class: "field", for: "tts-voice" }, h("span", { class: "label", text: "음성" }), sel));
+    box.append(h("label", { class: "field", for: "tts-voice" }, h("span", { class: "label", text: "음성" }), sel),
+      h("p", { class: "hint", text: speakerSplit() === "voice" ? "청해: 남·여 화자를 서로 다른 음성으로 읽어요. (내레이션은 위에서 고른 음성)" : "청해: 이 기기에는 일본어 음성이 하나뿐이라 남·여를 높낮이(pitch)로 구분해요." }));
   }
   box.append(h("div", { class: "row" }, speakBtn("日本語能力試験に向けて、毎日少しずつ勉強を続けましょう。", "예시 문장"), h("span", { class: "hint", text: "예시 문장 들어 보기 · 단어·한자·문법은 읽기(히라가나)로, 문장은 원문 그대로 읽어요." })));
   return box;
@@ -1124,7 +1201,7 @@ function minePanel(){
   const body = h("div", { class: "stack" });
   body.append(h("p", { class: "hint", text: "교재 문제 등을 직접 넣으면 문제은행에 섞여 나오고, 틀리면 복습 일정에도 들어가요. 이 기기에만 저장되고 백업 파일에는 포함돼요. GitHub 저장소에는 올라가지 않아요." }));
   const sel = h("select", { id: "mine-kind", onchange: e => { mine.kind = e.target.value; saveMine(); renderSettings(); } },
-    Object.entries(KINDS).map(([key, k]) => { const o = h("option", { value: key }, `${k.group} · ${k.label} (${k.jp})`); o.selected = key === mine.kind; return o; }));
+    Object.entries(KINDS).filter(([, k]) => !k.listen).map(([key, k]) => { const o = h("option", { value: key }, `${k.group} · ${k.label} (${k.jp})`); o.selected = key === mine.kind; return o; }));
   body.append(h("label", { class: "field", for: "mine-kind" }, h("span", { class: "label", text: "유형" }), sel));
   body.append(h("div", { class: "chips" },
     h("button", { class: "chip", "aria-pressed": String(mine.mode === "form"), onclick: () => { mine.mode = "form"; saveMine(); renderSettings(); } }, "직접 입력"),

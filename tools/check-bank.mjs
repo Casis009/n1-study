@@ -62,6 +62,25 @@ function checkStudy(u, kind, p, at, err){
     if (!M || ["A", "B", "common", "diff"].some(x => !hangul(M[x]))) err(`${at} mainIdea {A,B,common,diff} 누락`);
   } else if (!hangul(M)) err(`${at} mainIdea 없음`);
 }
+/* 청해: script [{speaker M/F/N, text, ko}] 필수. 即時応答은 stem ""·대사 1~2줄(내레이션 없음), 그 밖은 stem(질문)이 내레이션 줄에 그대로 있어야 */
+function checkListen(raw, q, kind, t, err){
+  const sc = Array.isArray(raw.script) ? raw.script : [];
+  if (!sc.length){ err(`${t} script 없음`); return; }
+  sc.forEach((l, i) => {
+    if (!["M", "F", "N"].includes(l.speaker)) err(`${t} script[${i}] speaker는 M/F/N`);
+    if (!l.text?.trim()) err(`${t} script[${i}] text 없음`);
+    if (!hangul(l.ko)) err(`${t} script[${i}] ko(한국어) 없음`);
+    if (/__|★/.test(l.text || "")) err(`${t} script[${i}]에 __ 또는 ★`);
+  });
+  if (kind === "listen_quick"){
+    if (q.stem.trim()) err(`${t} 即時応答 stem은 ""(질문도 음성)`);
+    if (sc.length > 2 || sc.some(l => l.speaker === "N")) err(`${t} 即時応答 script는 내레이션 없이 1~2줄`);
+  } else {
+    if (!q.stem.trim()) err(`${t} stem(질문) 없음`);
+    else if (!sc.some(l => l.speaker === "N" && l.text.includes(q.stem))) err(`${t} stem(질문)이 내레이션에 없음`);
+    if (!sc.some(l => l.speaker === "M") || !sc.some(l => l.speaker === "F")) err(`${t} 대화에 남·여 화자가 다 있어야`);
+  }
+}
 const index = { generated: new Date().toISOString().slice(0, 10), kinds: {} };
 
 for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "index.json").sort()){
@@ -101,9 +120,12 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
     set.questions.forEach((q, i) => {
       qn++;
       const t = `${at} Q${i + 1}`, ex = q.ex;
-      const key = q.stem + (p ? "|" + p.slice(0, 40) : "");
+      const key = q.stem + (p ? "|" + p.slice(0, 40) : "") + (q.script ? "|" + q.script.map(l => l.text).join("").slice(0, 60) : "");
       if (stems.has(key)) err(`${t} 문제가 ${stems.get(key)}와 같음`); else stems.set(key, t);
-      if (new Set(q.choices).size !== 4) err(`${t} 선택지 중복`);
+      const nc = k.choices || 4;
+      if (q.choices.length !== nc) err(`${t} 선택지 ${q.choices.length}개 (${nc}개여야 함)`);
+      if (new Set(q.choices).size !== q.choices.length) err(`${t} 선택지 중복`);
+      if (k.listen) checkListen(u.questions[i], q, kind, t, err); else if (u.questions[i].script) err(`${t} 청해가 아닌데 script가 있음`);
       if (q.choices.some(c => !c.trim())) err(`${t} 빈 선택지`);
       if (!q.patternTags.length) err(`${t} patternTags 없음`);
       for (const tag of q.patternTags) tagCount.set(tag, (tagCount.get(tag) || 0) + 1);
@@ -136,10 +158,10 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith(".json") && f !== "in
       if (!ex.choicesKo.some(c => c.ko || c.reading)) miss("choicesKo");
       else ex.choicesKo.forEach((c, j) => {
         if (!hangul(c.ko)) err(`${t} choicesKo[${j}] 한국어 뜻 누락`);
-        if (hasKanji(q.choices[j]) && q.choices[j].length <= 20 ? !kanaOnly(c.reading) : c.reading && !kanaOnly(c.reading)) err(`${t} choicesKo[${j}] 읽기 누락/가나 아님 (${q.choices[j]})`);
+        if (hasKanji(q.choices[j]) && q.choices[j].length <= 20 && !k.listen ? !kanaOnly(c.reading) : c.reading && !kanaOnly(c.reading)) err(`${t} choicesKo[${j}] 읽기 누락/가나 아님 (${q.choices[j]})`);
       });
       if (!q.gloss.length) miss("gloss"); else {
-        checkGloss(q.gloss, [q.stem, ...q.choices], t, err);
+        checkGloss(q.gloss, [q.stem, ...q.choices, ...(q.script || []).map(l => l.text)], t, err);
         if (q.gloss.length > 12) warn(`${t} gloss ${q.gloss.length}개 (문장당 3~8개 기준)`);
       }
       if ([ex.why, ...ex.choiceNotes].some(n => /[①②③④]|[1-4]번|선택지 ?[1-4]/.test(n))) err(`${t} 해설이 선택지를 번호로 지칭(선택지는 섞임)`);
