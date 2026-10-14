@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { VKINDS } from "../src/vocab.js";
 import { readingErr } from "../src/furigana.js";
+import { blankOf } from "./grammar-blank.mjs";
 
 const DIR = new URL("../data/vocab/", import.meta.url), BANK = new URL("../data/bank/", import.meta.url);
 const PREFIX = { grammar: "g-", kanji: "k-", words: "w-" };
@@ -54,6 +55,9 @@ for (const kind of Object.keys(VKINDS)){
         const e = readingErr(s); if (e) err(`${at} similar「${s.pattern}」 ${e}`);
       }
       { const e = readingErr(it); if (e) err(`${at} ${e}`); }
+      { const b = blankOf(it);                         // 오늘의 시험 문법 빈칸
+        if (b.error) err(`${at} ${b.error}`);
+        else if (!b.range) warn(`${at} 예문에서 빈칸 위치(패턴 부분)를 못 찾음 → 항목에 "blank": "예문 속 패턴 부분"을 지정`); }
       keys.grammar.add(it.pattern);
     } else {
       if (!it.word) err(`${at} word 없음`);

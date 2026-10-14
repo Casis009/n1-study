@@ -87,6 +87,7 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 - 사용자가 입력한 '내 문제'(교재 문제 등)는 기기 IndexedDB(`localBank`)에만 저장. `data/`나 커밋에 절대 넣지 않는다(백업 파일에는 포함, 백업 파일은 .gitignore).
 - 문제은행을 고치면 `tools/check-bank.mjs` 오류 0을 확인하고 docs/bank-plan.md 진행 현황을 갱신.
 - 기본 단어장 문법 `pattern`은 문제은행 `patternTags`와 같은 표기. 단어장을 고치면 `tools/check-vocab.mjs` 오류 0·patternTags 누락 경고 0 확인.
+- 문법 예문의 오늘의 시험 빈칸은 자동으로 찾는다(tools/grammar-blank.mjs). 활용이 커서 못 찾으면 check-vocab이 경고 → 그 항목에 `"blank": "예문 속 패턴 부분"`을 직접 쓴다(예: 〜めく → "めいて").
 - 남은 작업 순서와 다음 시작 지점은 docs/bank-plan.md "전체 작업 순서"에 있다.
 - 외부 라이브러리 없이 유지(오프라인 캐시가 단순해짐). 필요하면 이유를 남길 것.
 - 모바일 우선: 400px 폭에서 가로 스크롤 금지, 터치 영역 넉넉하게.

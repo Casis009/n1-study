@@ -12,7 +12,7 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
-import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, markWrongUnits, qPerUnit } from "./bank.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, recordExamUnits, qPerUnit } from "./bank.js";
 import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, addDays, streak } from "./daily.js";
 import { EXAM_CFG, loadExam, examRounds, reservedIds, buildSection, sectionMinutes, scoreExam } from "./exam.js";
 import { hasKanji, rubyParts } from "./furigana.js";
@@ -934,12 +934,16 @@ async function finishExam(row){
   row.phase = "done";
   row.result = scoreExam(row);
   for (const s of Object.values(row.sections)) for (const q of s.questions) q.checked = true;
-  /* 예약 풀기: 틀린(안 고른 것 포함) 단위만 1일 뒤 복습으로, 오답노트에 저장 */
+  /* 예약 풀기: 단위마다 연습과 같은 규칙으로 기록(틀린 것(안 고른 것 포함) = 1일 뒤 복습, 맞힌 것 = 푼 것). 틀린 문항은 오답노트에 */
   row.released = true;
   applyReserve();
-  const wrongUnits = new Map();
-  for (const s of Object.values(row.sections)) for (const q of s.questions) if (q.sel !== q.answer) wrongUnits.set(q.unitId, q.kind);
-  await markWrongUnits([...wrongUnits].map(([id, kind]) => ({ id, kind }))).catch(() => {});
+  const units = new Map();                         // unitId → { id, kind, ok } (지문형은 세트 안 문항이 다 맞아야 ok)
+  for (const s of Object.values(row.sections)) for (const q of s.questions){
+    const u = units.get(q.unitId) || { id: q.unitId, kind: q.kind, ok: true };
+    if (q.sel !== q.answer) u.ok = false;
+    units.set(q.unitId, u);
+  }
+  await recordExamUnits([...units.values()]).catch(() => {});
   for (const s of Object.values(row.sections)){
     const title = `모의고사 ${row.round}회`;
     for (const q of s.questions) if (q.sel !== q.answer) await addNote({ id: `${row.id}-${s.id}`, kind: q.kind, title, passages: s.passages, questions: s.questions, passage: "" }, q).catch(() => {});
@@ -1058,7 +1062,7 @@ function renderExamResult(id){
   v.append(h("section", { class: "panel stack", style: "margin-top:12px" }, h("div", { class: "label", text: "대문별 정답률" }), tbl));
   const wrong = Object.values(row.sections).reduce((a, s) => a + s.questions.filter(q => q.sel !== q.answer).length, 0);
   v.append(h("section", { class: "panel stack", style: "margin-top:12px" },
-    h("p", { text: `틀린 문제 ${wrong}개는 오답노트에 넣었고, 1일 뒤 복습으로 나와요. 이 회차 문제는 이제 연습·문제집에도 나와요.` }),
+    h("p", { text: `틀린 문제 ${wrong}개는 오답노트에 넣었고, 1일 뒤 복습으로 나와요. 맞힌 문제는 연습에서 푼 것으로 기록했고, 이 회차 문제는 이제 문제집·복습에도 나와요.` }),
     h("div", { class: "row" },
       h("a", { class: "btn primary", href: `#/exam/review/${row.id}/s1/0` }, "1교시 해설"),
       h("a", { class: "btn primary", href: `#/exam/review/${row.id}/s2/0` }, "청해 해설"),

@@ -172,9 +172,9 @@ function nextProgress(prev, id, kind, ok, now){
   }
   return p;
 }
-/* 모의고사를 끝내고 예약을 풀 때: 틀린 단위만 복습 일정에(1일 뒤). 맞힌 단위는 기록하지 않아 연습에 '안 푼 것'으로 돌아간다 */
-export async function markWrongUnits(list){
-  const now = Date.now(), rows = list.map(({ id, kind }) => nextProgress(state.progress.get(id) || null, id, kind, false, now));
+/* 모의고사를 끝내고 예약을 풀 때: 연습과 같은 규칙으로 기록. 틀린 단위 = 1일 뒤 복습, 맞힌 단위 = 푼 것(처음 맞힌 것이면 복습 없음) */
+export async function recordExamUnits(list){
+  const now = Date.now(), rows = list.map(({ id, kind, ok }) => nextProgress(state.progress.get(id) || null, id, kind, ok, now));
   for (const p of rows) state.progress.set(p.id, p);
   if (rows.length) await db.putMany("progress", rows);
 }

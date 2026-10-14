@@ -8,11 +8,11 @@
 //   C: 나머지
 //   같은 등급 안에서는 은행에 나온 횟수가 많은 순, 같으면 id 순.
 // 덱: words = 한자 읽기(kanji.json) + 어휘(words.json), grammar = 문법(grammar.json).
-// 문법 빈칸: 예문 속 패턴 부분 [시작, 끝]. 패턴에서 〜와 (괄호)를 뺀 조각을 앞에서부터 가장 길게 맞춰 보고,
-//   앞부분이 절반 이상 맞으면 찾은 것으로 보고, 활용으로 끝이 달라진 경우(余儀なくされる → 余儀なくされた)는 뒤따르는 히라가나 4자까지 넓힌다.
-//   못 찾은 항목은 시험에서 뺀다.
+// 문법 빈칸: 예문 속 패턴 부분 [시작, 끝]. 규칙은 tools/grammar-blank.mjs(항목의 blank 직접 지정 → 없으면 자동).
+//   못 찾은 항목은 시험에서 빠지고, check-vocab이 경고한다.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { blankOf, cores } from "./grammar-blank.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const read = p => JSON.parse(readFileSync(ROOT + p, "utf8"));
@@ -46,8 +46,6 @@ for (const v of Object.values(bindex.kinds)){
 /* 문장 속 포함 횟수. 가나로만 된 짧은 말(ことに·なり 등)은 다른 말 속에 섞여 부풀므로 4자 이상만 센다 */
 const KANA_ONLY = /^[ぁ-ヿ〜]+$/;
 const countIn = (list, s) => s && s.length >= 2 && !(KANA_ONLY.test(s) && s.length < 4) ? list.reduce((a, t) => a + (t.includes(s) ? 1 : 0), 0) : 0;
-/* 문법 패턴 → 문장에서 찾을 조각들: 〜で나누고 (괄호) 빼기. 예: 〜なくして(は) → ["なくして"], 〜ただ〜のみ → ["ただ", "のみ"] */
-const cores = p => p.replace(/[（(][^）)]*[）)]/g, "").split("〜").map(s => s.trim()).filter(Boolean);
 
 function rankOf(key, isGrammar){
   let a = A_exact.get(key) || 0, b = B_exact.get(key) || 0;
@@ -62,22 +60,8 @@ function order(items, keyOf, isGrammar){
 }
 
 /* 문법 예문 빈칸 */
-const HIRA = /[ぁ-ゟ]/;
-function blankOf(it){
-  const ex = it.example || "";
-  for (const seg of cores(it.pattern).sort((x, y) => y.length - x.length)){
-    for (let len = seg.length; len >= Math.max(2, Math.ceil(seg.length * 0.5)); len--){
-      const at = ex.indexOf(seg.slice(0, len));
-      if (at < 0) continue;
-      let end = at + len;
-      if (len < seg.length) for (let k = 0; k < 4 && end < ex.length && HIRA.test(ex[end]); k++) end++;   // 활용 어미
-      return [at, end];
-    }
-  }
-  return null;
-}
 const blanks = {}, noBlank = [];
-for (const it of grammar){ const b = blankOf(it); if (b) blanks[it.id] = b; else noBlank.push(it.id); }
+for (const it of grammar){ const b = blankOf(it).range; if (b) blanks[it.id] = b; else noBlank.push(it.id); }
 
 const data = {
   _comment: "tools/rank-vocab.mjs가 만듦. 손으로 고치지 말 것. words/grammar = [id, 등급(A/B/C), 표제어] 우선순위 순, blanks = 문법 예문 빈칸 [시작, 끝]",
