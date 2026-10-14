@@ -25,9 +25,15 @@ const state = { status: "signedout", email: "", lastSync: ls.get(LS.last, null),
 const emit = () => opts.onState?.({ ...state });
 const set = patch => { Object.assign(state, patch); emit(); };
 
-export const IOS_HINT = "홈 화면 앱에서는 로그인이 끝나지 않았어요(아이폰이 로그인 창의 저장소를 막는 경우). Safari에서 casis009.github.io/n1-study 를 열어 로그인해 그 탭에서 쓰세요. 홈 화면 앱과 Safari 탭은 기기 저장소가 따로라, Safari 쪽에서 로그인하면 클라우드를 통해 진행 상황이 이어져요.";
-/* 아이폰 홈 화면 앱(standalone)은 팝업이 막히므로 리디렉트 */
+export const IOS_HINT = "로그인이 끝나지 않았어요(브라우저가 로그인 창의 저장소를 막는 경우). 아이폰 홈 화면 앱이라면 Safari에서 casis009.github.io/n1-study 를 열어 로그인해 그 탭에서 쓰세요(홈 화면 앱과 Safari 탭은 기기 저장소가 따로라, 클라우드를 통해 진행 상황이 이어져요). 다른 기기라면 [Google로 로그인]을 한 번 더 눌러 보세요.";
 const standalone = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+/*
+ * 리디렉트 로그인은 아이폰 홈 화면 앱에서만(그곳은 팝업이 막힘). 그 밖(PC·안드로이드 설치 앱 포함)은 팝업.
+ * 이유: 요즘 Chrome·Safari는 다른 도메인 저장소를 막아서, 앱 주소(casis009.github.io)와 authDomain(firebaseapp.com)이 다르면
+ * 리디렉트에서 돌아왔을 때 로그인 결과를 못 받는다(갤럭시 설치 앱에서 확인, 2026-10-14). 안드로이드 설치 앱은 팝업이 된다.
+ */
+const iosStandalone = () => navigator.standalone === true || (/iP(hone|ad|od)/.test(navigator.userAgent) && standalone());
+const redirect = p => { sessionStorage.setItem("n1.sync.redirect", String(Date.now())); return signInWithRedirect(auth, p); };
 
 export async function initSync(config, o){
   opts = o;
@@ -74,11 +80,13 @@ function authMsg(e){
 async function login(){
   const p = new GoogleAuthProvider();
   p.setCustomParameters({ prompt: "select_account" });
+  set({ error: "" });
   try {
-    if (standalone()){ sessionStorage.setItem("n1.sync.redirect", String(Date.now())); await signInWithRedirect(auth, p); return; }
+    if (iosStandalone()){ await redirect(p); return; }
     await signInWithPopup(auth, p);
   } catch (e){
-    if (e?.code === "auth/popup-blocked"){ await signInWithRedirect(auth, p); return; }
+    /* 팝업이 막히면: 리디렉트는 위 이유로 결과를 못 받을 수 있어 다시 누르도록 안내(버튼을 누른 직후에는 팝업이 허용된다) */
+    if (e?.code === "auth/popup-blocked"){ set({ status: "error", error: "로그인 창(팝업)이 막혔어요. [Google로 로그인]을 한 번 더 눌러 주세요. 계속 막히면 브라우저 설정에서 이 사이트의 팝업을 허용해 주세요." }); return; }
     const m = authMsg(e); if (m) set({ status: "error", error: m });
   }
 }
