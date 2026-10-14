@@ -438,17 +438,18 @@ function listenNode(q){
     const exam = settings.listenMode !== "practice" && !q.checked;
     const playing = listening?.q === q && listening.line == null;
     const used = exam && (q.plays || 0) >= 1 && !playing;
-    box.replaceChildren(
+    const items = listenItems(q), ns = q.script.length;
+    box.replaceChildren(...[                       // replaceChildren은 null을 "null" 글자로 넣으므로 걸러 낸다
       h("div", { class: "row" },
         h("button", { class: "btn" + (playing ? "" : " primary") + (ttsReady() ? "" : " off"), type: "button", disabled: used, onclick: () => playListen(q) },
           playing ? "■ 정지" : used ? "재생 끝 (실전 모드는 1번)" : (q.plays ? "▶ 다시 재생" : "▶ 재생")),
         h("div", { class: "chips" }, [["exam", "실전 1번"], ["practice", "연습 반복"]].map(([m, label]) =>
           h("button", { class: "chip", type: "button", "aria-pressed": String((settings.listenMode || "exam") === m),
             onclick: () => { settings.listenMode = m; savePrefs(); repaintListen(); } }, label)))),
-      !exam && q.script.length > 1 ? h("div", { class: "chips lines" }, h("span", { class: "hint", text: "문장 다시 듣기" }),
-        listenItems(q).map((it, i) => h("button", { class: "chip", type: "button", "aria-pressed": String(listening?.q === q && listening.line === i),
-          title: SPEAKER[it.speaker] || "", onclick: () => playListen(q, i) }, `${i + 1}${it.speaker === "M" ? "男" : it.speaker === "F" ? "女" : ""}`))) : null,
-      exam && !q.checked ? h("p", { class: "hint", text: "실전 모드: 시험처럼 한 번만 들을 수 있어요. 연습 모드에서는 반복·문장별 다시 듣기가 돼요." }) : null);
+      !exam && items.length > 1 ? h("div", { class: "chips lines" }, h("span", { class: "hint", text: "문장 다시 듣기" }),
+        items.map((it, i) => h("button", { class: "chip", type: "button", "aria-pressed": String(listening?.q === q && listening.line === i),
+          title: SPEAKER[it.speaker] || "", onclick: () => playListen(q, i) }, i >= ns ? `答${i - ns + 1}` : `${i + 1}${it.speaker === "M" ? "男" : it.speaker === "F" ? "女" : ""}`))) : null,
+      exam && !q.checked ? h("p", { class: "hint", text: "실전 모드: 시험처럼 한 번만 들을 수 있어요. 연습 모드에서는 반복·문장별 다시 듣기가 돼요." }) : null].filter(Boolean));
   };
   listenPaints.add(paint);
   paint();
