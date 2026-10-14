@@ -103,5 +103,16 @@ if (existsSync(BANK)) for (const f of readdirSync(BANK).filter(f => f.endsWith("
 
 if (warns.length) console.log(`\n경고 ${warns.length}\n  ` + warns.join("\n  "));
 if (errors.length){ console.log(`\n오류 ${errors.length}\n  ` + errors.join("\n  ")); console.log("\nindex.json을 쓰지 않았어요."); process.exit(1); }
-writeFileSync(new URL("index.json", DIR), JSON.stringify(index) + "\n");
-console.log("\n오류 없음 · data/vocab/index.json 갱신");
+if (process.argv.includes("--strict") && warns.length){ console.log("\n경고도 0이어야 해요(--strict)."); process.exit(1); }
+// --no-write(check-all·pre-commit): index.json을 쓰지 않고, 지금 데이터로 만든 것과 같은지만 확인(날짜 제외)
+if (process.argv.includes("--no-write")){
+  let old = null;
+  try { old = JSON.parse(readFileSync(new URL("index.json", DIR), "utf8")); } catch {}
+  if (!old || JSON.stringify({ ...old, generated: "" }) !== JSON.stringify({ ...index, generated: "" })){
+    console.log("\ndata/vocab/index.json이 데이터와 다름 → node --no-warnings tools/check-all.mjs --write 로 갱신 후 커밋"); process.exit(1);
+  }
+  console.log("\n오류 없음 · data/vocab/index.json 최신");
+} else {
+  writeFileSync(new URL("index.json", DIR), JSON.stringify(index) + "\n");
+  console.log("\n오류 없음 · data/vocab/index.json 갱신");
+}

@@ -1,0 +1,13 @@
+#!/bin/sh
+# 커밋 전 전체 검사(tools/check-all.mjs). 실패하면 커밋하지 않는다.
+# 설치(클론마다 한 번): git config core.hooksPath .githooks
+command -v node >/dev/null 2>&1 || PATH="/c/Program Files/nodejs:/usr/local/bin:$PATH"
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node를 찾지 못했어요. Node.js를 설치하거나 PATH에 넣어 주세요." >&2
+  exit 1
+fi
+node --no-warnings tools/check-all.mjs || {
+  echo "" >&2
+  echo "pre-commit: check-all 실패 → 커밋을 막았어요. 고친 뒤 다시 커밋하세요." >&2
+  exit 1
+}

@@ -39,6 +39,7 @@ data/bank/             문제은행 <유형키>.json + index.json(도구가 생�
 tools/check-bank.mjs   문제은행 검증 + index.json 생성: node --no-warnings tools/check-bank.mjs
 data/vocab/            기본 단어장 grammar/kanji/words.json + index.json(도구가 생성). 뜻풀이·예문은 직접 작성
 tools/check-vocab.mjs  단어장 검증 + index.json 생성 + 문제은행 patternTags 누락 경고
+tools/check-all.mjs    커밋·push 전 전체 검사(문법 + check-bank + check-vocab). .githooks/pre-commit이 실행
 docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은행 계획·진행 현황·빈출 항목)
 ```
 
@@ -72,6 +73,8 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 
 ## 규칙
 
+- **push 전 `node --no-warnings tools/check-all.mjs` 통과 필수.** 모든 .js/.mjs를 ES 모듈 방식으로 문법 검사(그냥 `node --check src/x.js`는 깨진 정규식을 놓침) + check-bank + check-vocab(경고도 실패, index.json 최신 여부). 데이터를 고친 뒤에는 `--write`로 index.json까지 갱신. pre-commit hook(`.githooks/pre-commit`)이 같은 검사를 돌려 실패하면 커밋을 막는다 — 클론마다 `git config core.hooksPath .githooks` 한 번. hook을 `--no-verify`로 건너뛰지 않는다.
+- **코드(src/·sw.js·index.html)를 바꿔 push한 뒤에는 배포 페이지(https://casis009.github.io/n1-study/)를 한 번 열어 콘솔 오류가 없는지 확인한다.** (2026-10-14 main.js 문법 오류로 화면이 통째로 비었던 일의 재발 방지)
 - 모델 출력은 항상 `textContent`로 넣는다(`h()` 사용). `innerHTML` 금지.
 - API 키를 코드·저장소·백업 파일에 넣지 않는다. 키는 설정 화면 입력 → localStorage.
 - 기출문제·교재 문장을 그대로 넣지 않는다(저작권). 예시·문제은행은 직접 작성(빈출 항목 목록은 써도 되지만 문장은 새로), 생성은 "새로 쓰기" 지시.
