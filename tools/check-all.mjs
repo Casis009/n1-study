@@ -1,4 +1,4 @@
-// 커밋·push 전 전체 검사: 모든 .js/.mjs 문법(브라우저와 같은 ES 모듈 방식) + 문제은행 + 단어장.
+// 커밋·push 전 전체 검사: 모든 .js/.mjs 문법(브라우저와 같은 ES 모듈 방식) + 문제은행 + 단어장 + 모의고사 예약(pick-exam).
 // 사용: node --no-warnings tools/check-all.mjs          (index.json은 건드리지 않고 최신인지만 확인 — pre-commit hook이 이 모드)
 //       node --no-warnings tools/check-all.mjs --write  (데이터를 고친 뒤 index.json까지 갱신)
 // 하나라도 실패하면 exit 1. 경고도 실패로 본다(--strict).
@@ -36,9 +36,9 @@ list.forEach((f, i) => {
 rmSync(tmp, { recursive: true, force: true });
 console.log(`문법 검사 ${list.length}개 파일${failed ? ` · 실패 ${failed}` : " · 통과"}`);
 
-/* 2) 문제은행·단어장 */
-for (const tool of ["check-bank.mjs", "check-vocab.mjs"]){
-  const args = ["--no-warnings", join(ROOT, "tools", tool), "--strict", ...(write ? [] : ["--no-write"])];
+/* 2) 문제은행·단어장·모의고사 예약 */
+for (const tool of ["check-bank.mjs", "check-vocab.mjs", "pick-exam.mjs"]){
+  const args = ["--no-warnings", join(ROOT, "tools", tool), ...(tool === "pick-exam.mjs" ? [] : ["--strict", ...(write ? [] : ["--no-write"])])];
   const r = spawnSync(process.execPath, args, { encoding: "utf8", cwd: ROOT });
   const out = (r.stdout || "") + (r.stderr || "");
   if (r.status !== 0){ failed++; console.log(`✗ ${tool}\n${out.trim()}\n`); }

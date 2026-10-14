@@ -170,6 +170,12 @@ function nextProgress(prev, id, kind, ok, now){
   }
   return p;
 }
+/* 모의고사를 끝내고 예약을 풀 때: 틀린 단위만 복습 일정에(1일 뒤). 맞힌 단위는 기록하지 않아 연습에 '안 푼 것'으로 돌아간다 */
+export async function markWrongUnits(list){
+  const now = Date.now(), rows = list.map(({ id, kind }) => nextProgress(state.progress.get(id) || null, id, kind, false, now));
+  for (const p of rows) state.progress.set(p.id, p);
+  if (rows.length) await db.putMany("progress", rows);
+}
 const qOk = q => q.sel === q.answer && !q.saved;
 export async function recordSet(set){
   if (!set.bank) return;

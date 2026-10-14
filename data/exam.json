@@ -1,0 +1,41 @@
+{
+ "_comment": [
+  "실전 모의고사 구성. JSON이라 주석 대신 _comment·_source 필드에 남긴다.",
+  "official = 공식 대문별 문항 수(목안). count = 이 앱에서 낼 문항 수(문항형), sets = 낼 세트 수(지문형). kind가 null이면 앱에 없는 유형 → 건너뜀.",
+  "score: lang = 언어지식(문자·어휘·문법), read = 독해, listen = 청해. 각 0~60점으로 단순 비율 환산(공식 등화 점수가 아니라 추정).",
+  "예약 문제는 data/exam-reserve.json (tools/pick-exam.mjs --add 로 회차 추가)."
+ ],
+ "_source": [
+  "1교시 대문 순서·문항 수: 国際交流基金・日本国際教育支援協会『新しい「日本語能力試験」ガイドブック』(2009) p.20「N1 大問のねらい」 https://www.jlpt.jp/e/reference/pdf/guidebook1.pdf — 문항 수는 '目安'이고 바뀔 수 있다고 적혀 있음. 현재 공식 페이지(https://www.jlpt.jp/guideline/testsections.html, https://www.jlpt.jp/guideline/pdf/n1_revised.pdf)에는 1교시 문항 수가 없어서 확인하지 못함 → estimated: true",
+  "시험 시간(1교시 110분, 청해 55분)과 청해 문항 수(課題理解 5·ポイント理解 6·概要理解 5·即時応答 11·統合理解 3): 2022년 제2회(12월)부터 변경, https://www.jlpt.jp/topics/202208051659676565.html",
+  "합격 기준: 총점 100/180 이상, 과목별(언어지식·독해·청해 각 0~60) 기준점 19 이상, https://www.jlpt.jp/guideline/results.html"
+ ],
+ "estimated": true,
+ "pass": { "total": 100, "max": 180, "sectionMax": 60, "sectionMin": 19 },
+ "scores": { "lang": "언어지식(문자·어휘·문법)", "read": "독해", "listen": "청해" },
+ "breakMinutes": 20,
+ "sections": [
+  { "id": "s1", "label": "1교시 언어지식(문자·어휘·문법)·독해", "minutes": 110, "items": [
+   { "no": 1, "jp": "漢字読み", "kind": "kanji_reading", "official": 6, "count": 6, "score": "lang" },
+   { "no": 2, "jp": "文脈規定", "kind": "context", "official": 7, "count": 7, "score": "lang" },
+   { "no": 3, "jp": "言い換え類義", "kind": "paraphrase", "official": 6, "count": 6, "score": "lang" },
+   { "no": 4, "jp": "用法", "kind": "usage", "official": 6, "count": 6, "score": "lang" },
+   { "no": 5, "jp": "文の文法1（文法形式の判断）", "kind": "grammar_blank", "official": 10, "count": 10, "score": "lang" },
+   { "no": 6, "jp": "文の文法2（文の組み立て）", "kind": "grammar_order", "official": 5, "count": 5, "score": "lang" },
+   { "no": 7, "jp": "文章の文法", "kind": "text_grammar", "official": 5, "sets": 1, "score": "lang" },
+   { "no": 8, "jp": "内容理解（短文）", "kind": "reading_short", "official": 4, "sets": 2, "score": "read" },
+   { "no": 9, "jp": "内容理解（中文）", "kind": "reading_mid", "official": 9, "sets": 3, "score": "read" },
+   { "no": 10, "jp": "内容理解（長文）", "kind": "reading_long", "official": 4, "sets": 1, "score": "read", "note": "앱에 없는 유형 → 主張理解（長文） 1세트(3문항)로 대체" },
+   { "no": 11, "jp": "統合理解", "kind": "integrated", "official": 3, "sets": 1, "score": "read", "note": "앱 세트는 2문항(공식 3문항)" },
+   { "no": 12, "jp": "主張理解（長文）", "kind": "reading_long", "official": 4, "sets": 1, "score": "read", "note": "앱 세트는 3문항(공식 4문항)" },
+   { "no": 13, "jp": "情報検索", "kind": "info_search", "official": 2, "sets": 1, "score": "read" }
+  ] },
+  { "id": "s2", "label": "청해", "minutes": 55, "items": [
+   { "no": 1, "jp": "課題理解", "kind": "listen_task", "official": 5, "count": 3, "score": "listen", "note": "문제은행이 작아서 3문항만(공식 5문항)" },
+   { "no": 2, "jp": "ポイント理解", "kind": "listen_point", "official": 6, "count": 3, "score": "listen", "note": "문제은행이 작아서 3문항만(공식 6문항)" },
+   { "no": 3, "jp": "概要理解", "kind": null, "official": 5, "score": "listen", "note": "앱에 없는 유형 → 건너뜀" },
+   { "no": 4, "jp": "即時応答", "kind": "listen_quick", "official": 11, "count": 11, "score": "listen" },
+   { "no": 5, "jp": "統合理解", "kind": null, "official": 3, "score": "listen", "note": "앱에 없는 유형 → 건너뜀" }
+  ] }
+ ]
+}

@@ -26,6 +26,7 @@ src/main.js            상태와 렌더링 전부. 해시 경로(#/home, #/part/
 src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제·문제집 회차(bookRounds)·모의고사 예약 제외
 src/vocab.js           기본 단어장 로드·외웠어요(vocabDone)·틀리면 외웠어요 해제
 src/kinds.js           N1 1교시 12개 + 청해 3개 문제 유형 정의, 주제 목록, 시험일
+src/exam.js            실전 모의고사: 구성·예약 읽기, 교시 세트 만들기, 시간(문항 수 비례/공식), 점수 환산(추정)
 src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱
 src/gemini.js          Gemini REST 호출, 하루 호출 수 카운터, 한도 초기화 시각
@@ -39,7 +40,10 @@ data/bank/             문제은행 <유형키>.json + index.json(도구가 생�
 tools/check-bank.mjs   문제은행 검증 + index.json 생성: node --no-warnings tools/check-bank.mjs
 data/vocab/            기본 단어장 grammar/kanji/words.json + index.json(도구가 생성). 뜻풀이·예문은 직접 작성
 tools/check-vocab.mjs  단어장 검증 + index.json 생성 + 문제은행 patternTags 누락 경고
-tools/check-all.mjs    커밋·push 전 전체 검사(문법 + check-bank + check-vocab). .githooks/pre-commit이 실행
+tools/check-all.mjs    커밋·push 전 전체 검사(문법 + check-bank + check-vocab + pick-exam). .githooks/pre-commit이 실행
+data/exam.json         모의고사 구성(JLPT 대문 순서·공식 문항 수·시간·합격 기준, 대체/건너뜀, 출처는 _source). 1교시 문항 수는 추정(estimated)
+data/exam-reserve.json 모의고사 회차별 예약 단위. tools/pick-exam.mjs --add 로 회차 추가(id 큰 쪽부터, 기존 회차 유지)
+tools/pick-exam.mjs    예약 검사(인자 없음) / 회차 추가(--add). 문제가 모자라면 실패
 docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은행 계획·진행 현황·빈출 항목)
 ```
 

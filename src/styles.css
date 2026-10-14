@@ -373,3 +373,35 @@ a.btn.disabled{opacity:.45;pointer-events:none}
 .round-row.done .rs{color:var(--ink)}
 .round-row .bar{grid-column:1 / -1}
 .bar.mini{height:4px}
+/* ---- 모의고사 ---- */
+.exam-head .exam-timer{font-size:18px}
+.exam-head .exam-timer.low{color:var(--ng)}
+.dai{display:grid;gap:2px;margin:12px 2px 0}
+.dai b{font:700 15px var(--mincho)}
+.dai.first b{color:var(--ai)}
+.flag-btn{min-width:50px;min-height:50px;font-size:20px;line-height:1}
+.flag-btn[aria-pressed="true"]{color:var(--mark-ink);border-color:var(--mark-ink);background:var(--mark)}
+.sheet .qcell.answered{border-color:var(--ai);background:var(--ai-soft)}
+.sheet .qcell.answered i{color:var(--ai);font-family:var(--sans)}
+.sheet .qcell.flagged{box-shadow:inset 0 -3px 0 var(--mark-ink)}
+.exam-plan td{vertical-align:top}
+.exam-plan tr.skip td{color:var(--muted);text-decoration:line-through}
+.exam-plan tr.skip td .hint{text-decoration:none}
+.exam-plan tr.sub td:first-child{box-shadow:inset 3px 0 0 var(--mark-ink);padding-left:8px}
+.opts{display:grid;gap:8px}
+.opt{display:grid;gap:2px;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--sheet);min-height:56px}
+.opt[aria-pressed="true"]{border-color:var(--ai);box-shadow:inset 0 0 0 1px var(--ai);background:var(--ai-soft)}
+.plain-list{margin:0;padding-left:1.2em;display:grid;gap:4px}
+.big-num{font:500 30px/1.1 var(--mono)}
+.verdict-big{font-size:18px;font-weight:700;padding:6px 14px;border-radius:99px}
+.verdict-big.ok{color:var(--ok);background:var(--ok-soft)}
+.verdict-big.ng{color:var(--ng);background:var(--ng-soft)}
+.score-rows{display:grid;gap:10px}
+.score-row{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:baseline}
+.score-row b{font-size:20px}
+.score-row .bar{grid-column:1 / -1}
+.score-row.low b{color:var(--ng)}
+.tag.ok{border-color:var(--ok);color:var(--ok)}
+.tag.ng{border-color:var(--ng);color:var(--ng)}
+.hist li.link{cursor:pointer}
+main > .panel + .panel,main > .panel + details.panel{margin-top:12px}

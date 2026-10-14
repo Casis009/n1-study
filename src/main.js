@@ -12,7 +12,8 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
-import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved } from "./bank.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, markWrongUnits } from "./bank.js";
+import { EXAM_CFG, loadExam, examRounds, reservedIds, buildSection, sectionMinutes, scoreExam } from "./exam.js";
 import { hasKanji, rubyParts } from "./furigana.js";
 import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, RATE_LABEL, speakerSplit } from "./tts.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
@@ -425,7 +426,7 @@ function playListen(q, line = null){
   const items = listenItems(q);
   speak(line == null ? items : [items[line]], { onEnd: () => { if (listening?.q === q){ listening = null; repaintListen(); } } });
   listening = { q, line };
-  if (line == null && !q.checked){ q.plays = (q.plays || 0) + 1; saveCurrent(); }
+  if (line == null && !q.checked){ q.plays = (q.plays || 0) + 1; if (q.exam) saveExam(activeExam()); else saveCurrent(); }
   repaintListen();
 }
 function listenNode(q){
@@ -433,7 +434,8 @@ function listenNode(q){
   const paint = () => {
     if (!box.isConnected && box.dataset.drawn){ listenPaints.delete(paint); return; }
     box.dataset.drawn = "1";
-    const exam = settings.listenMode !== "practice" && !q.checked;
+    const lock = q.exam && !q.checked;                // 모의고사 중: 실전 모드 고정
+    const exam = lock || (settings.listenMode !== "practice" && !q.checked);
     const playing = listening?.q === q && listening.line == null;
     const used = exam && (q.plays || 0) >= 1 && !playing;
     const items = listenItems(q), ns = q.script.length;
@@ -441,13 +443,13 @@ function listenNode(q){
       h("div", { class: "row" },
         h("button", { class: "btn" + (playing ? "" : " primary") + (ttsReady() ? "" : " off"), type: "button", disabled: used, onclick: () => playListen(q) },
           playing ? "■ 정지" : used ? "재생 끝 (실전 모드는 1번)" : (q.plays ? "▶ 다시 재생" : "▶ 재생")),
-        h("div", { class: "chips" }, [["exam", "실전 1번"], ["practice", "연습 반복"]].map(([m, label]) =>
+        lock ? null : h("div", { class: "chips" }, [["exam", "실전 1번"], ["practice", "연습 반복"]].map(([m, label]) =>
           h("button", { class: "chip", type: "button", "aria-pressed": String((settings.listenMode || "exam") === m),
             onclick: () => { settings.listenMode = m; savePrefs(); repaintListen(); } }, label)))),
       !exam && items.length > 1 ? h("div", { class: "chips lines" }, h("span", { class: "hint", text: "문장 다시 듣기" }),
         items.map((it, i) => h("button", { class: "chip", type: "button", "aria-pressed": String(listening?.q === q && listening.line === i),
           title: SPEAKER[it.speaker] || "", onclick: () => playListen(q, i) }, i >= ns ? `答${i - ns + 1}` : `${i + 1}${it.speaker === "M" ? "男" : it.speaker === "F" ? "女" : ""}`))) : null,
-      exam && !q.checked ? h("p", { class: "hint", text: "실전 모드: 시험처럼 한 번만 들을 수 있어요. 연습 모드에서는 반복·문장별 다시 듣기가 돼요." }) : null].filter(Boolean));
+      exam && !q.checked && !lock ? h("p", { class: "hint", text: "실전 모드: 시험처럼 한 번만 들을 수 있어요. 연습 모드에서는 반복·문장별 다시 듣기가 돼요." }) : null].filter(Boolean));
   };
   listenPaints.add(paint);
   paint();
@@ -578,8 +580,10 @@ function renderHome(){
       h("div", { class: "pc-stats" }, h("div", null, h("b", { text: pct(a.pct) }), h("span", { text: " 정답률" })), p.due ? h("div", null, h("b", { text: String(p.due) }), h("span", { text: " 복습" })) : null),
       h("div", null, barNode(p.pct), h("span", { class: "hint", text: `진행 ${p.seen}/${p.total}` })));
   })));
-  v.append(h("a", { class: "mock-card", href: "#/exam" },
-    h("div", null, h("b", { text: "실전 모의고사" }), h("span", { class: "hint", text: "1교시(언어지식·독해) → 휴식 → 청해, 점수 환산·합격 판정" })),
+  const act = activeExam(), lastEx = [...exams].reverse().find(e => e.result);
+  v.append(h("a", { class: "mock-card", href: act ? "#/exam/run" : "#/exam" },
+    h("div", null, h("b", { text: "실전 모의고사" }),
+      h("span", { class: "hint", text: act ? `${act.round}회 진행 중 · 이어서` : lastEx ? `최근 ${lastEx.round}회 ${lastEx.result.total}/${lastEx.result.max}점 (추정) · ${examRounds().length}회분` : "1교시(언어지식·독해) → 휴식 → 청해, 점수 환산·합격 판정" })),
     h("span", { class: "chev", text: "›" })));
 }
 
@@ -768,6 +772,253 @@ async function renderBook(){
   }
   if (!rounds.length) list.append(h("p", { class: "hint", style: "padding:16px", text: "이 유형은 문제집 회차가 아직 없어요." }));
   v.append(list, h("p", { class: "hint", style: "margin-top:10px", text: "문제집에서 푼 결과도 복습 일정과 정답률에 들어가요. 회차는 10문항(지문형은 세트 단위로 10문항 이내)씩이에요." }));
+}
+
+/* ---------- 실전 모의고사 ---------- */
+/* exams 행: { id, round, startedAt, timing: "prop"|"official", phase: "s1"|"break"|"s2"|"done", breakAt, sections: { s1, s2 }, result, released }
+ * 시간은 끝나는 시각(ends)으로 저장 → 앱을 닫았다 열어도 계속 흐르고, 지나 있으면 그 교시를 자동 제출한다. 해설은 다 끝난 뒤에만. */
+let exams = [], examSheet = false, examConfirm = false, examPreview = null, examTiming = "prop";
+const activeExam = () => exams.find(e => e.phase !== "done") || null;
+const releasedRounds = () => new Set(exams.filter(e => e.released).map(e => e.round));
+const applyReserve = () => setReserved(reservedIds(releasedRounds()));
+let examSaveTimer = null;
+function saveExam(row){ clearTimeout(examSaveTimer); examSaveTimer = setTimeout(() => db.put("exams", row).catch(() => {}), 300); }
+const DAI_NO = n => `問題${n}`;
+const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ""}` : `${m}분`;
+
+function renderExam(){
+  const [sub, a, b, c] = route.args;
+  examSheet = sub === "run" ? examSheet : false;
+  if (!EXAM_CFG){ $("view-exam").replaceChildren(h("div", { class: "status err", text: "모의고사 구성 파일을 읽지 못했어요. 인터넷 연결을 확인하세요." })); return; }
+  if (sub === "start") return renderExamStart(Number(a));
+  if (sub === "run") return renderExamRun();
+  if (sub === "result") return renderExamResult(a);
+  if (sub === "review") return renderExamReview(a, b, Number(c) || 0);
+  renderExamList();
+}
+function renderExamList(){
+  const v = $("view-exam"); v.replaceChildren();
+  const act = activeExam();
+  if (act) v.append(h("section", { class: "panel row" },
+    h("div", { class: "grow" }, h("b", { text: `${act.round}회 진행 중` }), h("span", { class: "hint", text: ` · ${act.phase === "break" ? "휴식" : act.phase === "s1" ? "1교시" : "청해"}` })),
+    h("a", { class: "btn primary big", href: "#/exam/run" }, "이어서 →")));
+  const list = h("div", { class: "menu", style: act ? "margin-top:12px" : null });
+  for (const no of examRounds()){
+    const done = exams.filter(e => e.round === no && e.result).sort((x, y) => y.startedAt - x.startedAt)[0];
+    const live = act?.round === no;
+    list.append(h("div", { class: "kind-row" },
+      h("div", { class: "kr-top" }, h("b", { text: `모의고사 ${no}회` }),
+        done ? h("span", { class: "tag " + (done.result.pass ? "ok" : "ng"), text: `${done.result.total}/${done.result.max}점 · ${done.result.pass ? "합격권" : "불합격권"} (추정)` }) : null),
+      h("div", { class: "kr-stats" }, done ? h("span", { text: `${new Date(done.startedAt).toLocaleDateString("ko-KR")} 응시 · 예약 풀림(문제가 연습·문제집으로 돌아감)` })
+        : h("span", { text: "아직 안 봤어요 · 이 회차 문제는 연습·문제집에 나오지 않아요" })),
+      h("div", { class: "kr-act" },
+        done ? h("a", { class: "btn", href: `#/exam/result/${done.id}` }, "결과·해설") : live ? h("a", { class: "btn primary", href: "#/exam/run" }, "이어서")
+          : h("a", { class: "btn primary" + (act ? " disabled" : ""), href: `#/exam/start/${no}` }, "시작 준비"))));
+  }
+  v.append(list);
+  v.append(h("p", { class: "hint", style: "margin-top:10px", text: `구성은 JLPT 공식 자료 기준이에요(1교시 문항 수는 공식 페이지에 없어 2009년 가이드북의 '目安' 값을 쓴 추정). 점수는 맞힌 비율로 환산한 추정이에요. 합격선: 총점 ${EXAM_CFG.pass.total}/${EXAM_CFG.pass.max}, 과목별 기준점 ${EXAM_CFG.pass.sectionMin}.` }));
+}
+async function renderExamStart(no){
+  const v = $("view-exam"); v.replaceChildren(h("p", { class: "hint", text: "구성을 불러오는 중…" }));
+  try {
+    if (examPreview?.no !== no) examPreview = { no, s1: await buildSection(no, EXAM_CFG.sections[0]), s2: await buildSection(no, EXAM_CFG.sections[1]) };
+  } catch (e){ v.replaceChildren(h("div", { class: "status err", text: e.message })); return; }
+  const p = examPreview;
+  v.replaceChildren();
+  for (const s of [p.s1, p.s2]){
+    const tbl = h("table", { class: "tagstat exam-plan" }, h("thead", null, h("tr", null, h("th", { text: "대문" }), h("th", { text: "공식" }), h("th", { text: "앱" }))),
+      h("tbody", null, s.items.map(it => h("tr", { class: !it.kind ? "skip" : it.note ? "sub" : null },
+        h("td", null, h("span", { lang: "ja", text: `${DAI_NO(it.no)} ${it.jp}` }), it.note ? h("div", { class: "hint", text: it.note }) : null),
+        h("td", { class: "mono", text: String(it.official) }), h("td", { class: "mono", text: it.kind ? String(it.n) : "–" })))));
+    v.append(h("section", { class: "panel stack", style: "margin-bottom:12px" }, h("div", { class: "label", text: `${s.label} · ${s.questions.length}문항 (공식 ${s.officialQn})` }), tbl));
+  }
+  const opt = (key, label, sub) => h("button", { class: "opt", type: "button", "aria-pressed": String(examTiming === key), onclick: () => { examTiming = key; renderExamStart(no); } },
+    h("b", { text: label }), h("span", { class: "hint", text: sub }));
+  v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "시험 시간" }),
+    h("div", { class: "opts" },
+      opt("prop", "문항 수 비례 (기본)", `1교시 ${fmtMin(sectionMinutes(p.s1, "prop"))} · 청해 ${fmtMin(sectionMinutes(p.s2, "prop"))} — 공식 시간 × 앱 문항 수 ÷ 공식 문항 수`),
+      opt("official", "공식 시간", `1교시 ${fmtMin(p.s1.officialMin)} · 청해 ${fmtMin(p.s2.officialMin)}`)),
+    h("ul", { class: "hint plain-list" },
+      h("li", { text: "1교시 → 휴식 → 청해 순서예요. 시작하면 앱을 닫아도 시간이 계속 흐르고, 시간이 끝나면 자동으로 제출돼요." }),
+      h("li", { text: "해설·정답은 시험을 다 끝낸 뒤에만 볼 수 있어요. 문제 사이를 오가고 체크 표시를 할 수 있고, [마킹표]에서 답안을 한눈에 봐요." }),
+      h("li", { text: "청해는 기기의 일본어 음성으로 한 번만 재생돼요(실전 모드)." })),
+    h("button", { class: "btn primary big", disabled: !!activeExam(), onclick: () => startExam(no) }, "시작하기")));
+}
+async function startExam(no){
+  const p = examPreview?.no === no ? examPreview : { s1: await buildSection(no, EXAM_CFG.sections[0]), s2: await buildSection(no, EXAM_CFG.sections[1]) };
+  const now = Date.now();
+  const row = { id: `exam-${no}-${now.toString(36)}`, round: no, startedAt: now, timing: examTiming, phase: "s1", breakAt: null, sections: { s1: p.s1, s2: p.s2 }, result: null, released: false };
+  row.sections.s1.ends = now + sectionMinutes(row.sections.s1, row.timing) * 60000;
+  examPreview = null;
+  exams.push(row); await db.put("exams", row).catch(() => {}); ensurePersist();
+  go("exam/run", { replace: true });
+}
+function examLeft(s){ return Math.max(0, s.ends - Date.now()); }
+/* 교시 제출: 1교시 → 휴식, 청해 → 채점 */
+async function submitSection(row, auto = false){
+  examSheet = false; examConfirm = false;
+  if (row.phase === "s1"){ row.phase = "break"; row.breakAt = Date.now(); }
+  else if (row.phase === "s2"){ await finishExam(row); }
+  saveExam(row);
+  if (auto) toast(row.phase === "break" ? "1교시 시간이 끝나 자동으로 제출했어요" : "청해 시간이 끝나 자동으로 제출했어요");
+  if (route.name === "exam") render();
+}
+function startListening(row){
+  row.phase = "s2"; row.sections.s2.ends = Date.now() + sectionMinutes(row.sections.s2, row.timing) * 60000;
+  saveExam(row); render();
+}
+async function finishExam(row){
+  row.phase = "done";
+  row.result = scoreExam(row);
+  for (const s of Object.values(row.sections)) for (const q of s.questions) q.checked = true;
+  /* 예약 풀기: 틀린(안 고른 것 포함) 단위만 1일 뒤 복습으로, 오답노트에 저장 */
+  row.released = true;
+  applyReserve();
+  const wrongUnits = new Map();
+  for (const s of Object.values(row.sections)) for (const q of s.questions) if (q.sel !== q.answer) wrongUnits.set(q.unitId, q.kind);
+  await markWrongUnits([...wrongUnits].map(([id, kind]) => ({ id, kind }))).catch(() => {});
+  for (const s of Object.values(row.sections)){
+    const title = `모의고사 ${row.round}회`;
+    for (const q of s.questions) if (q.sel !== q.answer) await addNote({ id: `${row.id}-${s.id}`, kind: q.kind, title, passages: s.passages, questions: s.questions, passage: "" }, q).catch(() => {});
+    /* 풀이 기록(유형별): 홈·파트의 정답률에 들어간다 */
+    const byKind = new Map();
+    for (const q of s.questions){ const r = byKind.get(q.kind) || { right: 0, total: 0 }; r.total++; if (q.sel === q.answer) r.right++; byKind.set(q.kind, r); }
+    for (const [kind, r] of byKind){
+      const rec = { id: `${row.id}-${kind}-${s.id}`, at: Date.now(), kind, title: `모의고사 ${row.round}회`, total: r.total, right: r.right, elapsedMs: 0, exam: true };
+      history = [rec, ...history]; await db.put("history", rec).catch(() => {});
+    }
+  }
+  await db.put("exams", row).catch(() => {});
+  renderNoteCount();
+  go(`exam/result/${row.id}`, { replace: true });
+}
+/* 1초마다: 남은 시간 표시, 시간이 끝나면 자동 제출(다른 화면에 있어도) */
+setInterval(() => {
+  const row = activeExam(); if (!row || (row.phase !== "s1" && row.phase !== "s2")) return;
+  const s = row.sections[row.phase], left = examLeft(s);
+  const t = $("exam-timer"); if (t){ t.textContent = fmtTime(left + 999); t.classList.toggle("low", left < 5 * 60000); }
+  if (left <= 0 && !row.submitting){ row.submitting = true; submitSection(row, true).finally(() => { delete row.submitting; }); }
+}, 1000);
+
+function examQuestionNode(q, i){
+  const wrap = h("article", { class: "q" });
+  const listen = !!q.script?.length, quick = listen && !q.stem.trim();
+  wrap.append(h("div", { class: "q-stem" }, h("span", { class: "q-no", text: `${i + 1}` }),
+    listen ? h("div", { class: "jp listen-q hint", text: quick ? "🎧 짧은 말과 대답 1~3을 듣고 가장 알맞은 대답을 고르세요" : "🎧 질문은 음성으로 나와요. 들은 뒤 답을 고르세요" } ) : stemNode(q.stem, null)));
+  if (listen) wrap.append(listenNode(q));
+  wrap.append(h("ol", { class: "choices" }, q.choices.map((c, k) => h("li", null,
+    h("button", { class: "choice", "aria-pressed": String(q.sel === k), onclick: () => { q.sel = q.sel === k ? null : k; saveExam(activeExam()); renderExamRun(); } },
+      h("span", { class: "bubble", text: String(k + 1) }), quick ? h("span", { class: "hint", text: "음성으로 들어요" }) : h("span", { class: "jp", lang: "ja", text: c }))))));
+  return wrap;
+}
+function renderExamRun(){
+  const v = $("view-exam"); v.replaceChildren();
+  const row = activeExam();
+  if (!row){ v.append(h("div", { class: "panel empty" }, h("p", { text: "진행 중인 모의고사가 없어요." }), h("a", { class: "btn primary", href: "#/exam" }, "모의고사 목록"))); return; }
+  $("title").textContent = `모의고사 ${row.round}회`;
+  if (row.phase === "break"){
+    const s2 = row.sections.s2, mins = sectionMinutes(s2, row.timing);
+    const el = h("b", { class: "big-num", id: "break-timer" });
+    const tick = () => { el.textContent = fmtTime(Date.now() - row.breakAt); };
+    const id = setInterval(() => { if (!el.isConnected) clearInterval(id); else tick(); }, 1000); tick();
+    v.append(h("section", { class: "panel stack center" },
+      h("div", { class: "label", text: "1교시 끝 · 휴식" }), el, h("p", { class: "hint", text: `실제 시험처럼 ${EXAM_CFG.breakMinutes}분 정도 쉬어도 돼요. 준비되면 청해를 시작하세요.` }),
+      h("p", { text: `청해 ${s2.questions.length}문항 · ${fmtMin(mins)} · 재생은 문제마다 한 번` }),
+      ttsReady() ? null : h("p", { class: "status err", text: "이 기기에서 일본어 음성을 찾지 못했어요. 청해 전에 음성을 설치하세요." }),
+      h("button", { class: "btn primary big", onclick: () => startListening(row) }, "청해 시작")));
+    return;
+  }
+  const s = row.sections[row.phase], n = s.questions.length;
+  s.pos = Math.min(Math.max(0, s.pos || 0), n - 1);
+  const answered = s.questions.filter(q => q.sel != null).length;
+  v.append(h("div", { class: "play-head exam-head" },
+    barNode(answered / n * 100),
+    h("div", { class: "meta" },
+      h("b", { text: row.phase === "s1" ? "1교시" : "청해" }), h("span", { class: "mono", text: `${s.pos + 1} / ${n}` }), h("span", { class: "hint", text: `답 ${answered}` }),
+      h("span", { class: "grow" }),
+      h("b", { class: "mono exam-timer", id: "exam-timer", role: "timer", text: fmtTime(examLeft(s) + 999) }),
+      h("button", { class: "btn small" + (examSheet ? " primary" : ""), onclick: () => { examSheet = !examSheet; examConfirm = false; renderExamRun(); } }, "마킹표"))));
+  if (examSheet){ v.append(examSheetNode(row, s)); return; }
+  const q = s.questions[s.pos], it = s.items.find(x => x.no === q.dai), src = s.passages[q.unitId];
+  const first = s.questions.findIndex(x => x.dai === q.dai) === s.pos;
+  const sec = h("section", { class: "set one" });
+  sec.append(h("div", { class: "dai" + (first ? " first" : "") }, h("b", { lang: "ja", text: `${DAI_NO(it.no)} ${it.jp}` }), it.note ? h("span", { class: "hint", text: it.note }) : null));
+  if (src?.passage?.trim()) sec.append(passageNode(src.passage, q.kind, null));
+  sec.append(examQuestionNode(q, s.pos));
+  v.append(sec);
+  const flagged = s.flags.includes(s.pos), last = s.pos === n - 1;
+  const move = d => { s.pos = Math.max(0, Math.min(n - 1, s.pos + d)); saveExam(row); renderExamRun(); window.scrollTo({ top: 0 }); };
+  v.append(h("div", { class: "play-nav" },
+    h("button", { class: "btn big", disabled: s.pos === 0, onclick: () => move(-1) }, "← 이전"),
+    h("button", { class: "btn flag-btn", "aria-pressed": String(flagged), "aria-label": "체크 표시", onclick: () => { flagged ? s.flags.splice(s.flags.indexOf(s.pos), 1) : s.flags.push(s.pos); saveExam(row); renderExamRun(); } }, flagged ? "⚑" : "⚐"),
+    last ? h("button", { class: "btn big primary", onclick: () => { examSheet = true; renderExamRun(); } }, "마킹표·제출")
+      : h("button", { class: "btn big primary", onclick: () => move(1) }, "다음 →")));
+}
+function examSheetNode(row, s){
+  const box = h("section", { class: "panel stack sheet" });
+  for (const it of s.items){
+    const idx = s.questions.map((q, i) => q.dai === it.no ? i : -1).filter(i => i >= 0);
+    box.append(h("div", null, h("div", { class: "label", lang: "ja", text: `${DAI_NO(it.no)} ${it.jp}${it.kind ? "" : " · 건너뜀(앱에 없음)"}` }),
+      idx.length ? h("div", { class: "qgrid" }, idx.map(i => {
+        const q = s.questions[i];
+        return h("button", { class: "qcell" + (q.sel != null ? " answered" : "") + (s.flags.includes(i) ? " flagged" : ""), type: "button",
+          onclick: () => { s.pos = i; examSheet = false; saveExam(row); renderExamRun(); window.scrollTo({ top: 0 }); } },
+          h("span", { text: String(i + 1) }), h("i", { text: q.sel != null ? NUM[q.sel] : "–" }));
+      })) : null));
+  }
+  const blank = s.questions.filter(q => q.sel == null).length, flags = s.flags.length;
+  const acts = h("div", { class: "confirm" });
+  if (!examConfirm) acts.append(h("button", { class: "btn primary big", onclick: () => { examConfirm = true; renderExamRun(); } }, row.phase === "s1" ? "1교시 제출" : "청해 제출 · 채점"));
+  else acts.append(h("span", { text: `${blank ? `안 고른 문항 ${blank}개는 오답이 돼요. ` : ""}${flags ? `체크 ${flags}개. ` : ""}제출하면 이 교시로 돌아올 수 없어요.` }),
+    h("button", { class: "btn primary", onclick: () => submitSection(row) }, "제출"),
+    h("button", { class: "btn ghost", onclick: () => { examConfirm = false; renderExamRun(); } }, "취소"));
+  box.append(h("p", { class: "hint", text: `답 ${s.questions.length - blank}/${s.questions.length} · ⚑ 체크 ${flags}` }), acts);
+  return box;
+}
+function renderExamResult(id){
+  const v = $("view-exam"); v.replaceChildren();
+  const row = exams.find(e => e.id === id);
+  if (!row?.result){ v.append(h("p", { class: "hint", text: "결과를 찾지 못했어요." })); return; }
+  $("title").textContent = `모의고사 ${row.round}회 결과`;
+  const r = row.result, cfg = EXAM_CFG.pass;
+  v.append(h("section", { class: "panel stack" },
+    h("div", { class: "hero-top" }, h("div", null, h("div", { class: "big", text: `${r.total} / ${r.max}` }), h("div", { class: "sub", text: "총점 (추정)" })),
+      h("span", { class: "verdict-big " + (r.pass ? "ok" : "ng"), text: r.pass ? "합격권" : "불합격권" })),
+    h("div", { class: "score-rows" }, Object.entries(r.scores).map(([k, x]) => h("div", { class: "score-row" + (x.scaled != null && x.scaled < cfg.sectionMin ? " low" : "") },
+      h("span", { text: EXAM_CFG.scores[k] }), h("b", { class: "mono", text: x.scaled == null ? "–" : `${x.scaled}` }), h("span", { class: "hint mono", text: `${x.right}/${x.total}` }),
+      barNode(x.scaled == null ? 0 : x.scaled / cfg.sectionMax * 100, x.scaled != null && x.scaled >= cfg.sectionMin ? "ok" : "")))),
+    h("p", { class: "hint", text: `합격선 총점 ${cfg.total}점 + 과목별 기준점 ${cfg.sectionMin}점. 점수는 맞힌 비율 × 60으로 환산한 추정이에요(공식 점수는 문항별 배점·등화를 거침).${r.sectionOk ? "" : " 기준점에 못 미친 과목이 있어요."}` })));
+  const tbl = h("table", { class: "tagstat exam-plan" }, h("thead", null, h("tr", null, h("th", { text: "대문" }), h("th", { text: "맞힘" }), h("th", { text: "정답률" }))),
+    h("tbody", null, r.dai.map(d => h("tr", { class: !d.total ? "skip" : d.right < d.total / 2 ? "ng" : null },
+      h("td", null, h("span", { lang: "ja", text: `${d.section === "s2" ? "청해 " : ""}${DAI_NO(d.no)} ${d.jp}` }), d.note ? h("div", { class: "hint", text: d.note }) : null),
+      h("td", { class: "mono", text: d.total ? `${d.right}/${d.total}` : "–" }), h("td", { class: "mono", text: d.total ? Math.round(d.right / d.total * 100) + "%" : "건너뜀" })))));
+  v.append(h("section", { class: "panel stack", style: "margin-top:12px" }, h("div", { class: "label", text: "대문별 정답률" }), tbl));
+  const wrong = Object.values(row.sections).reduce((a, s) => a + s.questions.filter(q => q.sel !== q.answer).length, 0);
+  v.append(h("section", { class: "panel stack", style: "margin-top:12px" },
+    h("p", { text: `틀린 문제 ${wrong}개는 오답노트에 넣었고, 1일 뒤 복습으로 나와요. 이 회차 문제는 이제 연습·문제집에도 나와요.` }),
+    h("div", { class: "row" },
+      h("a", { class: "btn primary", href: `#/exam/review/${row.id}/s1/0` }, "1교시 해설"),
+      h("a", { class: "btn primary", href: `#/exam/review/${row.id}/s2/0` }, "청해 해설"),
+      h("a", { class: "btn", href: "#/note" }, "오답노트"))));
+}
+function renderExamReview(id, sid, i){
+  const v = $("view-exam"); v.replaceChildren();
+  const row = exams.find(e => e.id === id), s = row?.sections[sid];
+  if (!row?.result || !s?.questions.length){ v.append(h("p", { class: "hint", text: "해설을 찾지 못했어요." })); return; }
+  const n = s.questions.length; i = Math.max(0, Math.min(n - 1, i));
+  const q = s.questions[i], it = s.items.find(x => x.no === q.dai), src = s.passages[q.unitId];
+  $("title").textContent = `${row.round}회 ${sid === "s1" ? "1교시" : "청해"} 해설`;
+  const go2 = j => go(`exam/review/${id}/${sid}/${j}`, { replace: true });
+  v.append(h("div", { class: "play-head" }, barNode((i + 1) / n * 100),
+    h("div", { class: "meta" }, h("b", { class: "mono", text: `${i + 1} / ${n}` }), h("span", { lang: "ja", text: `${DAI_NO(it.no)} ${it.jp}` }), h("span", { class: "grow" }),
+      h("button", { class: "btn small", onclick: () => { const j = s.questions.findIndex((x, k) => k > i && x.sel !== x.answer); if (j >= 0) go2(j); else toast("뒤에 틀린 문제가 없어요"); } }, "다음 오답"))));
+  const sec = h("section", { class: "set one" });
+  if (src?.passage?.trim()) sec.append(...passageBlock(src, q.kind, true, `모의고사 ${row.round}회`));
+  sec.append(questionNode(q, i, { source: `모의고사 ${row.round}회`, label: `${i + 1}`, onChange: () => renderExamReview(id, sid, i) }));
+  v.append(sec, h("div", { class: "play-nav" },
+    h("button", { class: "btn big", disabled: i === 0, onclick: () => go2(i - 1) }, "← 이전"),
+    h("a", { class: "btn", href: `#/exam/result/${id}` }, "결과"),
+    h("button", { class: "btn big primary", disabled: i === n - 1, onclick: () => go2(i + 1) }, "다음 →")));
 }
 
 /* ---------- 오답노트 ---------- */
@@ -1306,11 +1557,17 @@ function renderRec(){
     for (const r of [...history].sort((a, b) => b.at - a.at).slice(0, 12)){
       const d = new Date(r.at);
       ul.append(h("li", null, h("span", { class: "mono", text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { lang: "ja", text: KINDS[r.kind]?.jp || "" }),
-        h("span", { class: "mono", text: `${r.right}/${r.total}` }), h("span", { class: "mono hint", text: fmtTime(r.elapsedMs) })));
+        h("span", { class: "mono", text: `${r.right}/${r.total}` }), h("span", { class: "mono hint", text: r.exam ? "모의" : fmtTime(r.elapsedMs) })));
     }
     rec.append(ul);
   }
-  v.append(rec, tagStatsPanel());
+  const done = exams.filter(e => e.result).sort((a, b) => b.startedAt - a.startedAt);
+  const mock = h("section", { class: "panel stack" }, h("div", { class: "label", text: "모의고사" }));
+  if (!done.length) mock.append(h("p", { class: "hint", text: "모의고사를 끝내면 회차별 점수(추정)가 여기에 쌓여요." }));
+  else mock.append(h("ul", { class: "hist" }, done.map(e => { const d = new Date(e.startedAt), s = e.result.scores;
+    return h("li", { class: "link", onclick: () => go(`exam/result/${e.id}`) }, h("span", { class: "mono", text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { text: `${e.round}회 · ${e.result.pass ? "합격권" : "불합격권"}` }),
+      h("span", { class: "mono", text: `${e.result.total}/${e.result.max}` }), h("span", { class: "mono hint", text: `${s.lang.scaled ?? "–"}·${s.read.scaled ?? "–"}·${s.listen.scaled ?? "–"}` })); })));
+  v.append(mock, rec, tagStatsPanel());
 
 }
 function renderMine(){ const v = $("view-mine"); v.replaceChildren(minePanel()); }
@@ -1486,6 +1743,7 @@ function goBack(){
   const partOf = kind => KINDS[kind] ? `part/${encodeURIComponent(KINDS[kind].group)}` : "home";
   const parent = route.name === "play" ? (current?.book ? `book/${current.book.kind}` : current?.sample ? "ai" : partOf(current?.kind))
     : route.name === "book" ? partOf(route.args[0])
+    : route.name === "exam" && route.args.length ? (route.args[0] === "review" ? `exam/result/${route.args[1]}` : "exam")
     : VIEWS[route.name][2] || "home";
   go(parent, { replace: true });
 }
@@ -1502,7 +1760,7 @@ function render(){
   document.querySelectorAll("#tabbar a").forEach(a => { if (a.dataset.tab === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
   $("back").hidden = !parent;
   $("title").textContent = parentTitle();
-  document.body.classList.toggle("immersive", !!immersive);
+  document.body.classList.toggle("immersive", !!immersive || (route.name === "exam" && route.args[0] === "run"));
   document.body.classList.toggle("at-home", route.name === "home");
   closeGloss();
   ({ home: renderHome, part: () => renderPart(route.args[0]), play: renderPlay, book: renderBook, exam: renderExam, cards: renderCards, note: renderNote, rec: renderRec,
@@ -1525,13 +1783,14 @@ function renderMore(){
     row("#/mine", "내 문제 추가", `교재 문제 등 직접 입력 · ${bank.local.filter(r => r.source === "mine").length}개`),
     row("#/ai", "AI로 새 문제", "Gemini로 만들기 · 예시 세트")));
 }
-function renderExam(){ $("view-exam").replaceChildren(h("div", { class: "panel empty" }, h("p", { text: "실전 모의고사는 준비 중이에요." }))); }
 
 /* ---------- boot ---------- */
 async function loadAll(){
   let bookRows, markRows;
   [notes, cards, history, answers, bookRows, markRows] = await Promise.all(["notes", "cards", "history", "answers", "book", "marks"].map(st => db.all(st)));
   books = new Map(bookRows.map(r => [r.id, r])); marks = new Map(markRows.map(r => [r.id, r]));
+  exams = (await db.all("exams")).sort((a, b) => a.startedAt - b.startedAt);
+  applyReserve();
   notes.sort((a, b) => b.at - a.at); cards.sort((a, b) => b.at - a.at); answers.sort((a, b) => b.at - a.at);
   cardIds.clear(); for (const c of cards) cardIds.add(c.id);
   await loadBankState();
@@ -1558,7 +1817,8 @@ async function boot(){
   const dd = ddayNum();
   $("dday").append(h("span", { text: "시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
 
-  await Promise.all([loadIndex(), loadVocabIndex()]);
+  await Promise.all([loadIndex(), loadVocabIndex(), loadExam()]);
+  applyReserve();                                      // 기기 저장소를 못 열어도 예약 문제는 빼 둔다
   try {
     await loadAll();
     /* 이전 버전(한 파일짜리)에서 localStorage에 쌓인 오답노트 옮기기 */
