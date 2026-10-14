@@ -89,7 +89,7 @@ const text = JSON.stringify(data) + "\n";
 const tiers = list => ["A", "B", "C"].map(t => `${t} ${list.filter(x => x[1] === t).length}`).join(" · ");
 const summary = `단어 ${data.words.length}개(${tiers(data.words)}) · 문법 ${data.grammar.length}개(${tiers(data.grammar)}) · 빈칸 ${Object.keys(blanks).length}/${grammar.length}${noBlank.length ? ` (못 찾음 ${noBlank.join(", ")})` : ""}`;
 if (noWrite){
-  const cur = existsSync(ROOT + OUT) ? readFileSync(ROOT + OUT, "utf8") : "";
+  const cur = existsSync(ROOT + OUT) ? readFileSync(ROOT + OUT, "utf8").replace(/\r/g, "") : "";   // 체크아웃에서 CRLF로 바뀌어도 같은 내용으로 본다
   if (cur !== text){ console.log(`✗ ${OUT}가 최신이 아니에요 → node --no-warnings tools/rank-vocab.mjs`); process.exit(1); }
   console.log(`오류 없음 · ${OUT} 최신 · ${summary}`);
 } else {
