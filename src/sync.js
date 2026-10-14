@@ -35,10 +35,16 @@ export async function initSync(config, o){
   auth = getAuth(app); auth.languageCode = "ko";
   fs = getFirestore(app);
   /* 리디렉트로 돌아왔는데 로그인이 안 됐으면(아이폰 Safari가 다른 도메인 저장소를 막는 경우) 안내 */
-  getRedirectResult(auth).then(r => {
+  /* 로그인 상태 복원(authStateReady)을 기다린 뒤에도 로그인이 안 돼 있을 때만. 로그인이 됐는데 이 안내가 덮어쓰지 않게 */
+  getRedirectResult(auth).then(async r => {
     const tried = sessionStorage.getItem("n1.sync.redirect"); sessionStorage.removeItem("n1.sync.redirect");
+    await auth.authStateReady();
     if (tried && !r && !auth.currentUser) set({ status: "error", error: IOS_HINT });
-  }).catch(e => { sessionStorage.removeItem("n1.sync.redirect"); set({ status: "error", error: authMsg(e) || IOS_HINT }); });
+  }).catch(async e => {
+    sessionStorage.removeItem("n1.sync.redirect");
+    await auth.authStateReady();
+    if (!auth.currentUser){ const m = authMsg(e); if (m) set({ status: "error", error: m }); }
+  });
   onAuthStateChanged(auth, async u => {
     user = u;
     if (!u){ trackSync(false); set({ status: "signedout", email: "" }); return; }
@@ -48,7 +54,8 @@ export async function initSync(config, o){
     set({ status: "syncing", email: u.email || "" });
     if (first){
       try { ls.set(LS.pull(u.uid), {}); await syncDb.enqueueAll(); }
-      catch (e){ console.warn("[sync]", e); ls.set(LS.uid, null); set({ status: "error", error: `처음 합치기 준비 오류 (${e?.name || ""}): ${e?.message || e}` }); return; }
+      catch (e){ console.warn("[sync]", e); ls.set(LS.uid, null); stage = "처음 합치기 준비"; reportError(e?.name || "", e);
+        set({ status: "error", error: `처음 합치기 준비 오류 (${e?.name || ""}): ${e?.message || e}` }); return; }
     }
     syncNow();
   });
@@ -80,6 +87,17 @@ async function logout(){
   ls.set(LS.uid, null);                    // 다음 로그인은 다시 '처음 로그인'(합치기)
   set({ status: "signedout", email: "", error: "" });
 }
+/* 실패한 단계와 오류를 내 계정 공간 users/{uid}/debug/lastError에 남긴다(원인 확인용, 기록 내용은 넣지 않음) */
+let stage = "";
+function reportError(code, e){
+  if (!user || code === "unavailable") return;
+  try {
+    const b = writeBatch(fs);
+    b.set(doc(fs, "users", user.uid, "debug", "lastError"), { at: serverTimestamp(), stage, code: String(code), message: String(e?.message || e).slice(0, 1000),
+      stack: String(e?.stack || "").slice(0, 1500), ua: navigator.userAgent.slice(0, 300), standalone: standalone(), app: "n1-study" });
+    b.commit().catch(() => {});
+  } catch {}
+}
 /* 기록이 바뀌면 5초 뒤 묶어서 */
 function schedule(){ clearTimeout(timer); timer = setTimeout(syncNow, 5000); }
 
@@ -90,16 +108,17 @@ export async function syncNow(){
   set({ status: "syncing", error: "" });
   running = (async () => {
     try {
-      await push();
-      const changed = await pull();
+      stage = "올리기"; await push();
+      stage = "받기"; const changed = await pull();
+      if (changed.size){ stage = `받은 기록으로 화면 갱신(${[...changed].join(",")})`; await opts.onPulled?.(changed); }
       state.lastSync = Date.now(); ls.set(LS.last, state.lastSync);
       set({ status: "ok" });
-      if (changed.size) await opts.onPulled?.(changed);
     } catch (e){
       console.warn("[sync]", e);
-      const code = e?.code || e?.name || "";        // 화면에 코드까지 보여서 원인을 알 수 있게
+      const code = e?.code || e?.name || "";        // 화면에 코드·단계까지 보여서 원인을 알 수 있게
       set({ status: navigator.onLine ? "error" : "offline", error: code === "permission-denied" ? "권한이 없어요. Firestore 규칙(firestore.rules)을 콘솔에 붙여 넣었는지 확인하세요."
-        : `동기화 오류${code ? ` (${code})` : ""}: ${e?.message || e}` });
+        : `동기화 오류${code ? ` (${code})` : ""} · ${stage}: ${e?.message || e}` });
+      reportError(code, e);
     } finally {
       running = null;
       if (again){ again = false; syncNow(); }
@@ -119,6 +138,7 @@ async function push(){
   };
   for (const e of entries){
     if (!SYNC_STORES.includes(e.store)){ sent.push(e); continue; }
+    stage = "올리기 " + e.store + "/" + e.key;
     const row = await localDb.get(e.store, e.key);
     let data;
     if (row){
@@ -130,22 +150,24 @@ async function push(){
     }
     const sz = bytes(data.j) + 200;
     if (sz > DOC_MAX){ skipped.push(`${e.store}/${e.key}`); sent.push(e); continue; }
-    if (n >= BATCH || size + sz > BATCH_BYTES) await flush();
+    if (n >= BATCH || size + sz > BATCH_BYTES){ stage = "올리기 묶음 전송(" + n + "개)"; await flush(); }
     b.set(doc(col(e.store), docId(e.key)), { ...data, s: serverTimestamp() });
     n++; size += sz; sent.push(e);
   }
-  await flush();
+  stage = "올리기 묶음 전송(" + n + "개)"; await flush();
   if (skipped.length) console.warn("[sync] 너무 커서 건너뜀", skipped);
-  await pushPrefs();
+  stage = "설정 올리기"; await pushPrefs();
 }
 async function pull(){
   const marks = ls.get(LS.pull(user.uid), {}), changed = new Set();
   for (const store of SYNC_STORES){
+    stage = "받기 " + store;
     const since = marks[store] || 0;
     const snap = await getDocs(query(col(store), where("s", ">", Timestamp.fromMillis(since)), orderBy("s")));
     let max = since;
     for (const d of snap.docs){
       const r = d.data(), key = r.k, u = r.u || 0;
+      stage = "받기 " + store + "/" + key;
       max = Math.max(max, r.s?.toMillis?.() || 0);
       const local = await localDb.get(store, key), t = await syncDb.tomb(store, key);
       const localU = Math.max(local ? rowTime(local) : 0, t?._u || 0);
@@ -158,6 +180,7 @@ async function pull(){
     marks[store] = max;
   }
   ls.set(LS.pull(user.uid), marks);
+  stage = "설정 받기";
   if (await pullPrefs()) changed.add("prefs");
   return changed;
 }
