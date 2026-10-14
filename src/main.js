@@ -243,8 +243,7 @@ function segNodes(text, gl){
 }
 function passageNode(text, kind, gl){
   const box = h("div", { class: "passage" + (kind === "info_search" ? " plain" : ""), lang: "ja" });
-  for (const para of text.split(/
-+/).map(t => t.trim()).filter(Boolean))
+  for (const para of text.split(/\n+/).map(t => t.trim()).filter(Boolean))
     box.append(h("p", { class: /^[AB]$/.test(para) ? "mark-ab" : null }, segNodes(para, gl)));
   return box;
 }
@@ -252,8 +251,7 @@ function passageNode(text, kind, gl){
 /* ---------- 본문 해설: [문장별 해석] [단락 요지·흐름] [전체 번역] ---------- */
 const studyView = new WeakMap();                 // 세트·오답노트 객체 → 켜 둔 보기와 펼친 문장
 const studyState = o => { let st = studyView.get(o); if (!st){ st = { sent: false, notes: false, full: false, open: new Set(), speaking: null, playing: false }; studyView.set(o, st); } return st; };
-const passageBody = p => p.split("
-").map(l => l.trim()).filter(l => l && !/^[AB]$/.test(l)).join("");
+const passageBody = p => p.split("\n").map(l => l.trim()).filter(l => l && !/^[AB]$/.test(l)).join("");
 const hasStudy = o => o.sentences?.length > 0 && o.sentences.map(s => s.ja).join("") === passageBody(o.passage);
 const STUDY_BTNS = [["sent", "문장별 해석"], ["notes", "단락 요지·흐름"], ["full", "전체 번역"]];
 
@@ -269,8 +267,7 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
       wrap.append(passageNode(o.passage, kind, gl), h("div", { class: "study-bar" }, readAllBtn(o, st, wrap)));
       if (open && o.passageKo?.trim()){
         const d = h("details", { class: "passage-ko" }, h("summary", { text: "지문 해석 보기" }));
-        for (const para of o.passageKo.split(/
-+/).map(t => t.trim()).filter(Boolean)) d.append(h("p", { text: para }));
+        for (const para of o.passageKo.split(/\n+/).map(t => t.trim()).filter(Boolean)) d.append(h("p", { text: para }));
         wrap.append(d);
       }
       return;
@@ -284,8 +281,7 @@ function passageBlock(o, kind, on, source, { always = false } = {}){
     wrap.append(bar);
     if (mode("notes")) wrap.append(mainIdeaNode(o.mainIdea, kind));
     if (mode("full") && o.passageKo?.trim()) wrap.append(h("div", { class: "passage-ko full" },
-      h("div", { class: "label", text: "전체 번역" }), o.passageKo.split(/
-+/).map(t => t.trim()).filter(Boolean).map(t => h("p", { text: t }))));
+      h("div", { class: "label", text: "전체 번역" }), o.passageKo.split(/\n+/).map(t => t.trim()).filter(Boolean).map(t => h("p", { text: t }))));
   };
   paint();
   return [wrap];
@@ -303,8 +299,7 @@ function readAllBtn(o, st, wrap){
     if (!ttsReady()){ openTtsHelp(); return; }
     if (st.playing){ stopSpeak(); return; }
     const study = hasStudy(o);
-    const texts = study ? o.sentences.map(s => s.ja) : o.passage.split(/
-+/).map(t => t.trim()).filter(t => t && !/^[AB]$/.test(t));
+    const texts = study ? o.sentences.map(s => s.ja) : o.passage.split(/\n+/).map(t => t.trim()).filter(t => t && !/^[AB]$/.test(t));
     speak(texts, {
       onEach: i => { st.speaking = study ? i : null; sync(); },
       onEnd: () => { st.playing = false; st.speaking = null; sync(); }
