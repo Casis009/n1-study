@@ -2,6 +2,8 @@
  * 문제은행: 기본 은행(data/bank/*.json) + 기기 은행(localBank: AI로 만든 문제, 내 문제).
  * 출제 단위(unit): 문항형 유형은 문제 1개, 지문형 유형은 지문 1개 + 딸린 문항.
  * 복습: 틀리거나 "찍어서 맞힘"으로 저장하면 1일 → 3일 → 7일 → 14일 뒤 다시 내고, 14일 복습까지 맞히면 졸업.
+ * 모의고사 예약(data/exam-reserve.json)에 든 단위는 setReserved()로 받아서 연습·문제집·패턴 출제·남은 수에서 뺀다.
+ * 세트: 지문형은 여러 지문을 한 세트로 묶을 수 있다(문제집 회차·모의고사). set.passages = { unitId: 지문 필드 }, 문항마다 unitId.
  */
 import { KINDS } from "./kinds.js";
 import { db } from "./db.js";
@@ -14,6 +16,9 @@ const isUnitKind = kind => !!KINDS[kind]?.counts;          // 문항형: 문제 
 let index = { kinds: {} };
 const files = new Map();                                    // kind → 기본 은행 units
 export const state = { progress: new Map(), local: [], tags: new Map() };
+let reserved = new Set();
+export function setReserved(ids){ reserved = new Set(ids); }
+export const isReserved = id => reserved.has(id);
 
 export async function loadIndex(){
   try { const r = await fetch("./data/bank/index.json"); if (r.ok) index = await r.json(); } catch {}
@@ -27,7 +32,7 @@ export async function loadBankState(){
 }
 
 function unitIds(kind){
-  return [...(index.kinds[kind]?.ids || []), ...state.local.filter(r => r.kind === kind).map(r => r.id)];
+  return [...(index.kinds[kind]?.ids || []), ...state.local.filter(r => r.kind === kind).map(r => r.id)].filter(id => !reserved.has(id));
 }
 function status(id, now){
   const p = state.progress.get(id);
@@ -48,19 +53,26 @@ export function bankCounts(kind, now = Date.now()){
   return c;
 }
 
-async function loadUnits(kind){
+/* 기본 은행 단위 전체(예약 포함, 파일 순서) */
+export async function baseUnits(kind){
   if (!files.has(kind)){
     const f = index.kinds[kind]?.file;
     let units = [];
     if (f){ const r = await fetch("./data/bank/" + f); if (!r.ok) throw new Error("문제은행 파일을 읽지 못했어요. 인터넷 연결을 확인하세요."); units = (await r.json()).units || []; }
     files.set(kind, units);
   }
-  return [...files.get(kind), ...state.local.filter(r => r.kind === kind).map(r => ({ ...r.unit, id: r.id, source: r.source }))];
+  return files.get(kind);
+}
+async function loadUnits(kind){
+  return (await allUnits(kind)).filter(u => !reserved.has(u.id));
+}
+async function allUnits(kind){
+  return [...await baseUnits(kind), ...state.local.filter(r => r.kind === kind).map(r => ({ ...r.unit, id: r.id, source: r.source }))];
 }
 /* 지문이 같은 기본 은행 단위 (본문 해설이 없던 예전 세트·오답노트 보완용) */
 export async function findUnitByPassage(kind, passage){
   if (!passage?.trim() || !index.kinds[kind]) return null;
-  try { return (await loadUnits(kind)).find(u => u.passage === passage) || null; } catch { return null; }
+  try { return (await allUnits(kind)).find(u => u.passage === passage) || null; } catch { return null; }
 }
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
@@ -77,17 +89,21 @@ export async function pickSet(kind, count, { force = false } = {}){
   if (!order.length) return null;
   return buildSet(kind, isUnitKind(kind) ? order.slice(0, count) : order.slice(0, 1));
 }
-export function buildSet(kind, units){
+/* keepOrder: 문항 순서를 섞지 않는다(문제집·모의고사). 선택지는 언제나 섞는다. */
+export function buildSet(kind, units, { keepOrder = false, title = null } = {}){
   const k = KINDS[kind];
-  let raw;
+  let raw, passages = null;
   if (isUnitKind(kind)){
-    const qs = shuffle(units.flatMap(u => u.questions.map(q => ({ ...q, unitId: u.id }))));
-    raw = { kind, title: `${k.label} ${qs.length}문항`, topic: "", passage: "", questions: qs };
+    const qs = units.flatMap(u => u.questions.map(q => ({ ...q, unitId: u.id })));
+    raw = { kind, title: title || `${k.label} ${qs.length}문항`, topic: "", passage: "", questions: keepOrder ? qs : shuffle(qs) };
   } else {
     const u = units[0];
-    raw = { kind, title: u.title, topic: u.topic, passage: u.passage, ...passageFields(u), questions: u.questions.map(q => ({ ...q, unitId: u.id })) };
+    passages = Object.fromEntries(units.map(x => [x.id, { title: x.title, topic: x.topic, passage: x.passage, ...passageFields(x) }]));
+    raw = { kind, title: title || (units.length > 1 ? `${k.label} ${units.length}세트` : u.title), topic: u.topic, passage: u.passage, ...passageFields(u),
+      questions: units.flatMap(x => x.questions.map(q => ({ ...q, unitId: x.id }))) };
   }
   const set = prepSet(structuredClone(raw), { shuffle: true, fallbackKind: kind });
+  if (passages) set.passages = structuredClone(passages);
   set.bank = true; set.recorded = {}; set.snap = {};
   set.review = units.some(u => state.progress.get(u.id)?.due != null);
   return set;
@@ -103,9 +119,12 @@ function tagUnits(tag){
   }
   return byKind;
 }
-export function tagUnitCount(tag){ let n = 0; for (const ids of tagUnits(tag).values()) n += ids.size; return n; }
+export function tagUnitCount(tag){
+  let n = 0; for (const ids of tagUnits(tag).values()) for (const id of ids) if (!reserved.has(id)) n++;
+  return n;
+}
 export async function pickByTag(tag, count = 5){
-  const byKind = tagUnits(tag);
+  const byKind = new Map([...tagUnits(tag)].map(([k, ids]) => [k, new Set([...ids].filter(id => !reserved.has(id)))]).filter(([, ids]) => ids.size));
   if (!byKind.size) return null;
   const [kind, ids] = [...byKind].sort((a, b) => b[1].size - a[1].size)[0];
   const now = Date.now(), rank = u => ({ new: 0, due: 1 }[status(u.id, now)] ?? 2);
@@ -114,6 +133,29 @@ export async function pickByTag(tag, count = 5){
   const set = buildSet(kind, isUnitKind(kind) ? order.slice(0, count) : order.slice(0, 1));
   set.focusTag = tag;
   return set;
+}
+
+/*
+ * 문제집 회차: 기본 은행 단위를 파일 순서대로 묶는다(예약 단위 제외). 문항형은 10문항, 지문형은 세트를 모아 10문항을 넘지 않게(최소 1세트).
+ * 모의고사 예약은 id가 큰 쪽(최근에 쓴 문제)에서 뽑으므로, 예약이 늘어도 앞쪽 회차 구성은 그대로다. 예약이 풀린 단위는 뒤쪽 회차로 들어간다.
+ */
+export const BOOK_SIZE = 10;
+export async function bookRounds(kind){
+  const units = (await baseUnits(kind)).filter(u => !reserved.has(u.id));
+  const rounds = [];
+  let cur = null;
+  for (const u of units){
+    const n = u.questions.length;
+    if (!cur || cur.qn + n > BOOK_SIZE){ cur = { no: rounds.length + 1, ids: [], qn: 0 }; rounds.push(cur); }
+    cur.ids.push(u.id); cur.qn += n;
+  }
+  return rounds;
+}
+/* id 목록으로 세트 만들기(문제집 회차·북마크·모의고사). 없는 id는 건너뛴다 */
+export async function setFromIds(kind, ids, opts = {}){
+  const all = await allUnits(kind), byId = new Map(all.map(u => [u.id, u]));
+  const units = ids.map(id => byId.get(id)).filter(Boolean);
+  return units.length ? buildSet(kind, units, opts) : null;
 }
 
 /* 결과 기록. 같은 세트에서 "찍어서 맞힘" 저장/취소로 결과가 바뀌면 처음 상태(snap)에서 다시 계산한다. */

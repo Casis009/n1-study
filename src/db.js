@@ -11,12 +11,17 @@
  *   tagStats : 패턴별 통계        { id: 패턴, group, seen, wrong, lastAt }
  *   vocabDone: 기본 단어장 "외웠어요" { id: 단어장 항목 id, at }
  *   answers : 내 답변 노트(면접)  { id, at, updatedAt, cat, question, text, timerSec, followups: null | { at, model, items: [{ q, ko, intent, point }] } }
+ *   book    : 문제집 회차         { id: "kind:회차", kind, round, ids, set: <풀던·푼 세트> | null, last: { right, total, at } | null, best }
+ *   marks   : 문제집 북마크        { id: unitId, kind, at }
+ *   exams   : 모의고사 응시        { id, round, startedAt, timing, phase, ends, sets, flags, result, released }
+ *   daily   : 데일리 학습(날짜별)  { id: "YYYY-MM-DD", plan, done, test, completedAt }
+ *   vcards  : 단어·문법 카드 상태  { id: 단어장 항목 id, deck, step, due, seen, wrong, introducedOn, lastAt }
  *
- * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가, v4: vocabDone 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
+ * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가, v4: vocabDone 추가, v5: book·marks·exams·daily·vcards 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
  */
 const DB_NAME = "n1-study";
-const DB_VERSION = 4;
-export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats", "vocabDone"];
+const DB_VERSION = 5;
+export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats", "vocabDone", "book", "marks", "exams", "daily", "vcards"];
 
 let dbPromise = null;
 
@@ -73,13 +78,14 @@ export async function persistState(){
 
 /*
  * 백업: 기기 데이터를 JSON 하나로 내보내고, 불러올 때는 id 기준으로 합친다. API 키는 넣지 않는다.
- * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트),  v3: + progress·localBank(AI 문제·내 문제)·tagStats,  v4: + vocabDone.
+ * v1: notes/cards/history,  v2: + answers(면접 내 답변 노트),  v3: + progress·localBank(AI 문제·내 문제)·tagStats,  v4: + vocabDone,
+ * v5: + book(문제집)·marks(북마크)·exams(모의고사)·daily(데일리 학습)·vcards(카드 암기 상태).
  * 예전 version 파일도 그대로 불러올 수 있다.
  * notes·localBank 안의 문제에는 새 해설 필드(translation·choicesKo·gloss·passageKo·passageGloss·sentences·passageNotes·mainIdea)가 들어갈 수 있다.
  * 행을 통째로 저장·복원하므로 필드 추가만으로는 version을 올리지 않는다(예전 파일은 이 필드 없이 그대로 보인다).
  */
-export const BACKUP_VERSION = 4;
-const BACKUP_STORES = ["notes", "cards", "history", "answers", "progress", "localBank", "tagStats", "vocabDone"];
+export const BACKUP_VERSION = 5;
+const BACKUP_STORES = ["notes", "cards", "history", "answers", "progress", "localBank", "tagStats", "vocabDone", "book", "marks", "exams", "daily", "vcards"];
 export async function exportAll(){
   const rows = await Promise.all(BACKUP_STORES.map(s => db.all(s)));
   return { app: "n1-study", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), ...Object.fromEntries(BACKUP_STORES.map((s, i) => [s, rows[i]])) };

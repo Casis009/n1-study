@@ -12,7 +12,7 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
-import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage } from "./bank.js";
+import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved } from "./bank.js";
 import { hasKanji, rubyParts } from "./furigana.js";
 import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, RATE_LABEL, speakerSplit } from "./tts.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
@@ -33,7 +33,15 @@ let persist = "unsupported";
 
 const savePrefs = () => { prefs.set("n1.settings", settings); prefs.set("n1.gen", gen); };
 let curTimer = null;
-function saveCurrent(){ clearTimeout(curTimer); curTimer = setTimeout(() => db.put("meta", { id: "current", value: current }).catch(() => {}), 300); }
+/* 풀던 세트 저장(문제집 회차면 그 회차 기록에도) */
+function saveCurrent(){
+  clearTimeout(curTimer);
+  curTimer = setTimeout(() => {
+    db.put("meta", { id: "current", value: current }).catch(() => {});
+    const row = current?.book && books.get(`${current.book.kind}:${current.book.round}`);
+    if (row){ row.set = current; db.put("book", row).catch(() => {}); }
+  }, 300);
+}
 
 function toast(msg){
   const t = $("toast"); t.textContent = msg; t.hidden = false;
@@ -60,8 +68,9 @@ function cleanUnits(kind, raw){
 async function addNote(set, q){
   if (q.saved) return;
   q.saved = true;
-  const note = { id: set.id + "-" + set.questions.indexOf(q), at: Date.now(), kind: set.kind, title: set.title, passage: set.passage,
-    ...passageFields(set),
+  const src = set.passages?.[q.unitId] || set;          // 여러 지문이 든 세트는 문항이 속한 지문
+  const note = { id: set.id + "-" + set.questions.indexOf(q), at: Date.now(), kind: set.kind, title: src.title || set.title, passage: src.passage || "",
+    ...passageFields(src),
     q: { stem: q.stem, choices: q.choices, answer: q.answer, ex: q.ex, mySel: q.sel, patternTags: q.patternTags || [], gloss: q.gloss || [], ...(q.script ? { script: q.script } : {}) } };
   notes = [note, ...notes.filter(n => n.id !== note.id)];
   await db.put("notes", note); ensurePersist();
@@ -588,14 +597,21 @@ function renderPart(grp){
         h("span", null, "복습 ", h("b", { text: String(c.due) })),
         h("span", null, "정답률 ", h("b", { text: pct(a.pct) }))),
       h("div", { class: "kr-act" },
-        h("button", { class: "btn primary", disabled: !c.total, onclick: () => startPractice(key, !(c.left + c.due)) }, c.left + c.due || !c.total ? "연습" : "연습 (다시)"))));
+        h("button", { class: "btn primary", disabled: !c.total, onclick: () => startPractice(key, !(c.left + c.due)) }, c.left + c.due || !c.total ? "연습" : "연습 (다시)"),
+        h("a", { class: "btn" + (c.total ? "" : " disabled"), href: `#/book/${key}` }, "문제집"))));
   }
   v.append(list);
   if (grp === "청해") v.append(h("p", { class: "hint", style: "margin-top:10px", text: "청해는 이 기기의 읽어주기(일본어 음성)로 들어요. 概要理解·統合理解는 아직 없어요." }));
 }
 
-/* ---------- 연습: 풀던 세트 ---------- */
-function openSet(set){ current = set; saveCurrent(); go("play"); }
+/* ---------- 연습·문제집: 한 화면에 한 문제 ---------- */
+/* 세트의 pos = 지금 보는 문항 번호(문항 수와 같으면 결과 화면). 지문형은 문항이 속한 지문(set.passages[unitId])을 위에 보여 준다 */
+const srcOf = (s, q) => s.passages?.[q.unitId] || s;
+const unitDone = (s, uid) => s.questions.every(x => x.unitId !== uid || x.checked);
+function openSet(set){
+  if (set.pos == null){ const i = set.questions.findIndex(q => !q.checked); set.pos = i < 0 ? set.questions.length : i; }
+  current = set; saveCurrent(); go("play");
+}
 async function startPractice(kind, force = false){
   const k = KINDS[kind];
   try {
@@ -604,46 +620,155 @@ async function startPractice(kind, force = false){
     openSet(set);
   } catch (e){ toast(e?.message || "문제은행을 열지 못했어요."); }
 }
+function movePlay(d){
+  const s = current; if (!s || route.name !== "play") return;
+  const n = s.questions.length, q = s.questions[s.pos];
+  if (d > 0 && (s.pos >= n || !q?.checked)) return;
+  if (d < 0 && s.pos <= 0) return;
+  s.pos = Math.max(0, Math.min(n, s.pos + d));
+  saveCurrent(); renderPlay(); window.scrollTo({ top: 0 });
+}
+async function finishIfDone(s){
+  if (s.done || !s.questions.every(x => x.checked)) return;
+  s.done = true; s.elapsed = Date.now() - s.startedAt;
+  await logHistory(s); await recordSet(s).catch(() => {});
+  if (s.book){
+    const row = books.get(`${s.book.kind}:${s.book.round}`);
+    if (row){ const right = s.questions.filter(q => q.sel === q.answer).length;
+      row.last = { right, total: s.questions.length, at: Date.now() }; row.best = Math.max(row.best || 0, right); }
+  }
+}
+function markBtn(q, kind){
+  if (!q.unitId) return null;
+  const on = marks.has(q.unitId);
+  return h("button", { class: "btn mark-btn", type: "button", "aria-pressed": String(on), "aria-label": on ? "북마크 빼기" : "북마크", onclick: async () => {
+    if (marks.has(q.unitId)){ marks.delete(q.unitId); await db.del("marks", q.unitId).catch(() => {}); toast("북마크를 뺐어요"); }
+    else { const r = { id: q.unitId, kind, at: Date.now() }; marks.set(r.id, r); await db.put("marks", r).catch(() => {}); toast("북마크했어요 · 문제집에서 모아 풀 수 있어요"); }
+    renderPlay();
+  } }, on ? "★" : "☆");
+}
 function renderPlay(){
   const v = $("view-play"); v.replaceChildren();
   if (!current){ v.append(h("div", { class: "panel empty" }, h("p", { text: "풀던 세트가 없어요." }), h("a", { class: "btn primary", href: "#/home" }, "홈으로"))); return; }
-  const s = current;
-  const sec = h("section", { class: "set" });
+  const s = current, n = s.questions.length;
+  if (s.pos == null || s.pos > n) s.pos = Math.max(0, s.questions.findIndex(q => !q.checked));
+  const checked = s.questions.filter(q => q.checked).length;
+  $("title").textContent = s.book ? `${KINDS[s.kind]?.label} 第${s.book.round}回` : (KINDS[s.kind]?.label || "연습");
   const timer = h("span", { class: "mono", id: "set-timer", text: fmtTime(s.done ? s.elapsed : Date.now() - s.startedAt) });
-  sec.append(h("div", { class: "set-head" },
-    h("h2", { lang: "ja", text: s.title }),
+  v.append(h("div", { class: "play-head" },
+    barNode(checked / n * 100, s.done ? "ok" : ""),
     h("div", { class: "meta" },
+      h("b", { class: "mono", text: s.pos < n ? `${s.pos + 1} / ${n}` : `결과` }),
       s.sample ? h("span", { class: "tag sample", text: "예시" }) : null,
-      s.bank ? h("span", { class: "tag" + (s.review ? " review" : ""), text: s.review ? "복습 포함" : s.engine ? "AI 문제" : "문제은행" }) : null,
+      s.bank ? h("span", { class: "tag" + (s.review ? " review" : ""), text: s.review ? "복습 포함" : s.engine ? "AI 문제" : s.book ? "문제집" : "문제은행" }) : null,
       h("span", { class: "tag", lang: "ja", text: KINDS[s.kind]?.jp || "" }),
-      s.topic && !s.sample ? h("span", { class: "tag", text: s.topic }) : null,
-      h("span", null, "⏱ ", timer))));
-  if (s.passage.trim()) sec.append(...passageBlock(s, s.kind, s.done, s.title));
-  const qs = h("div", { class: "qs" });
-  s.questions.forEach((q, i) => qs.append(questionNode(q, i, {
-    source: s.title,
-    onChange: async () => {
-      if (!s.done && s.questions.every(x => x.checked)){ s.done = true; s.elapsed = Date.now() - s.startedAt; await logHistory(s); await recordSet(s).catch(() => {}); }
-      saveCurrent(); renderPlay();
-    },
+      h("span", { class: "grow" }), h("span", null, "⏱ ", timer))));
+  if (s.pos >= n){ v.append(playSummary(s)); return; }
+
+  const q = s.questions[s.pos], src = srcOf(s, q);
+  const sec = h("section", { class: "set one" });
+  if (src.passage?.trim()){
+    const inUnit = s.questions.filter(x => x.unitId === q.unitId);
+    if (src !== s || s.passages) sec.append(h("div", { class: "hint unit-title", lang: "ja", text: `${src.title || s.title}${inUnit.length > 1 ? ` · 이 지문 ${inUnit.indexOf(q) + 1}/${inUnit.length}번째 문항` : ""}` }));
+    sec.append(...passageBlock(src, s.kind, s.done || unitDone(s, q.unitId), src.title || s.title));
+  }
+  const i = s.pos;
+  sec.append(questionNode(q, i, {
+    source: src.title || s.title,
+    onChange: async () => { await finishIfDone(s); saveCurrent(); renderPlay(); },
     onCheck: async qq => { if (qq.sel !== qq.answer) await addNote(s, qq); renderNoteCount(); },
     extraActions: q.sel === q.answer
       ? [q.saved
           ? h("button", { class: "btn small ghost", onclick: async () => { q.saved = false; await removeNote(s.id + "-" + i); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderPlay(); renderNoteCount(); } }, "오답노트에서 빼기")
           : h("button", { class: "btn small ghost", onclick: async () => { await addNote(s, q); if (s.done) await recordSet(s).catch(() => {}); saveCurrent(); renderPlay(); renderNoteCount(); } }, "찍어서 맞힘 · 오답노트에 저장 · 복습에 넣기")]
       : [h("span", { class: "hint", text: "오답노트에 저장됐어요" })]
-  })));
-  sec.append(qs);
-  if (s.done){
-    const right = s.questions.filter(q => q.sel === q.answer).length;
-    sec.append(h("div", { class: "summary panel" },
-      h("div", null, h("div", { class: "label", text: "결과" }), h("span", { class: "score", text: `${right} / ${s.questions.length}` }),
-        h("span", { class: "hint", text: `  ·  소요 ${fmtTime(s.elapsed)}` })),
-      s.sample ? h("a", { class: "btn", href: "#/home" }, "홈으로") : h("button", { class: "btn primary", onclick: () => { window.scrollTo({ top: 0 }); startPractice(s.kind); } }, "같은 유형 계속 풀기")));
-  }
+  }));
   v.append(sec);
+  const last = i === n - 1;
+  v.append(h("div", { class: "play-nav" },
+    h("button", { class: "btn big", type: "button", disabled: i === 0, onclick: () => movePlay(-1) }, "← 이전"),
+    markBtn(q, s.kind),
+    h("button", { class: "btn big primary", type: "button", disabled: !q.checked, onclick: () => movePlay(1) }, last ? "결과 보기 →" : "다음 →")));
+  if (q.checked && !last) v.append(h("p", { class: "hint center", text: "왼쪽으로 밀어도 다음 문제로 넘어가요" }));
+}
+function playSummary(s){
+  const n = s.questions.length, right = s.questions.filter(q => q.sel === q.answer).length;
+  const box = h("section", { class: "panel stack summary-box" },
+    h("div", null, h("div", { class: "label", text: "결과" }), h("span", { class: "score", text: `${right} / ${n}` }),
+      h("span", { class: "hint", text: `  ·  소요 ${fmtTime(s.done ? s.elapsed : Date.now() - s.startedAt)}` })),
+    h("div", { class: "qgrid" }, s.questions.map((q, i) => h("button", { class: "qcell " + (!q.checked ? "" : q.sel === q.answer ? "ok" : "ng"), type: "button",
+      onclick: () => { s.pos = i; saveCurrent(); renderPlay(); window.scrollTo({ top: 0 }); } }, h("span", { text: String(i + 1) }), h("i", { text: !q.checked ? "–" : q.sel === q.answer ? "○" : "✕" })))));
+  const acts = h("div", { class: "row" });
+  if (s.sample) acts.append(h("a", { class: "btn", href: "#/home" }, "홈으로"));
+  else if (s.book) acts.append(h("button", { class: "btn primary", onclick: () => openBook(s.book.kind, s.book.round, { fresh: true }) }, "이 회차 다시 풀기"),
+    h("a", { class: "btn", href: `#/book/${s.kind}` }, "회차 목록"));
+  else acts.append(h("button", { class: "btn primary", onclick: () => startPractice(s.kind) }, "같은 유형 계속 풀기"),
+    h("a", { class: "btn", href: `#/part/${encodeURIComponent(KINDS[s.kind]?.group || "")}` }, "유형 목록"));
+  box.append(acts);
+  return box;
 }
 setInterval(() => { const t = $("set-timer"); if (t && current && !current.done) t.textContent = fmtTime(Date.now() - current.startedAt); }, 1000);
+/* 스와이프: 왼쪽 = 다음(정답 확인 뒤), 오른쪽 = 이전. 세로 스크롤과 구분하려고 가로로 크게 움직였을 때만 */
+(() => {
+  let x0 = null, y0 = 0;
+  const el = $("view-play");
+  el.addEventListener("touchstart", e => { if (e.touches.length !== 1 || getSelection()?.toString()){ x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener("touchend", e => {
+    if (x0 == null) return;
+    const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+    if (Math.abs(dx) > 70 && Math.abs(dy) < Math.abs(dx) * 0.5) movePlay(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  document.addEventListener("keydown", e => {
+    if (route.name !== "play" || e.target.closest?.("input,textarea,select")) return;
+    if (e.key === "ArrowRight") movePlay(1); else if (e.key === "ArrowLeft") movePlay(-1);
+  });
+})();
+
+/* ---------- 문제집: 회차 목록 · 점수 · 이어 풀기 · 북마크 ---------- */
+let books = new Map(), marks = new Map(), bookToken = 0;
+async function openBook(kind, no, { fresh = false } = {}){
+  const id = `${kind}:${no}`;
+  let row = books.get(id);
+  if (row?.set && !fresh){ openSet(row.set); return; }
+  try {
+    const ids = row?.ids || (await bookRounds(kind)).find(r => r.no === no)?.ids;
+    const set = ids && await setFromIds(kind, ids, { keepOrder: true, title: `${KINDS[kind].label} 第${no}回` });
+    if (!set){ toast("이 회차 문제를 찾지 못했어요"); return; }
+    set.book = { kind, round: no };
+    row = { ...(row || { id, kind, round: no, last: null, best: 0 }), ids, set };
+    books.set(id, row); await db.put("book", row).catch(() => {});
+    openSet(set);
+  } catch (e){ toast(e?.message || "문제집을 열지 못했어요"); }
+}
+async function renderBook(){
+  const v = $("view-book"), kind = route.args[0], k = KINDS[kind], token = ++bookToken;
+  v.replaceChildren();
+  if (!k){ v.append(h("p", { class: "hint", text: "없는 유형이에요." })); return; }
+  $("title").textContent = `${k.label} 문제집`;
+  let rounds;
+  try { rounds = await bookRounds(kind); } catch (e){ v.append(h("div", { class: "status err", text: e.message })); return; }
+  if (token !== bookToken) return;
+  const marked = [...marks.values()].filter(m => m.kind === kind && !isReserved(m.id));
+  const unitName = KINDS[kind].counts ? "문항" : "세트";
+  v.append(h("section", { class: "panel row" },
+    h("div", { class: "grow" }, h("b", { text: `북마크 ${marked.length}개` }), h("span", { class: "hint", text: "  문제를 풀 때 ☆를 누르면 모여요" })),
+    h("button", { class: "btn", disabled: !marked.length, onclick: async () => {
+      const set = await setFromIds(kind, marked.sort((a, b) => a.at - b.at).map(m => m.id), { keepOrder: true, title: `${k.label} 북마크 ${marked.length}${unitName}` });
+      if (set) openSet(set);
+    } }, "북마크만 풀기")));
+  const list = h("div", { class: "menu", style: "margin-top:12px" });
+  for (const r of rounds){
+    const row = books.get(`${kind}:${r.no}`), s = row?.set;
+    const live = s && !s.done, done = s ? s.questions.filter(q => q.checked).length : 0;
+    const status = live ? `이어 풀기 ${done}/${s.questions.length}` : row?.last ? `${row.last.right}/${row.last.total}점 · 최고 ${row.best}` : "안 풂";
+    list.append(h("button", { type: "button", class: "round-row" + (live ? " live" : row?.last ? " done" : ""), onclick: () => openBook(kind, r.no) },
+      h("div", null, h("span", { class: "rn", lang: "ja", text: `第${r.no}回` }), h("span", { class: "m-sub", text: `${r.qn}문항${KINDS[kind].counts ? "" : ` · ${r.ids.length}세트`}` })),
+      h("span", { class: "rs" + (row?.last ? " mono" : ""), text: status }),
+      row?.last ? barNode(row.last.right / row.last.total * 100, "ok mini") : null));
+  }
+  if (!rounds.length) list.append(h("p", { class: "hint", style: "padding:16px", text: "이 유형은 문제집 회차가 아직 없어요." }));
+  v.append(list, h("p", { class: "hint", style: "margin-top:10px", text: "문제집에서 푼 결과도 복습 일정과 정답률에 들어가요. 회차는 10문항(지문형은 세트 단위로 10문항 이내)씩이에요." }));
+}
 
 /* ---------- 오답노트 ---------- */
 const noteOpen = new Set(), noteRetry = new Map();
@@ -1358,12 +1483,16 @@ function go(path, { replace = false } = {}){
 }
 function goBack(){
   if (navDepth > 0){ nav.back(); return; }
-  const parent = route.name === "play" && current?.book ? `book/${current.book.kind}` : VIEWS[route.name][2] || "home";
+  const partOf = kind => KINDS[kind] ? `part/${encodeURIComponent(KINDS[kind].group)}` : "home";
+  const parent = route.name === "play" ? (current?.book ? `book/${current.book.kind}` : current?.sample ? "ai" : partOf(current?.kind))
+    : route.name === "book" ? partOf(route.args[0])
+    : VIEWS[route.name][2] || "home";
   go(parent, { replace: true });
 }
 function parentTitle(){
   if (route.name === "part") return route.args[0] || "";
   if (route.name === "play") return current ? (KINDS[current.kind]?.label || "") : "연습";
+  if (route.name === "book") return `${KINDS[route.args[0]]?.label || ""} 문제집`;
   return VIEWS[route.name][1];
 }
 function render(){
@@ -1396,12 +1525,13 @@ function renderMore(){
     row("#/mine", "내 문제 추가", `교재 문제 등 직접 입력 · ${bank.local.filter(r => r.source === "mine").length}개`),
     row("#/ai", "AI로 새 문제", "Gemini로 만들기 · 예시 세트")));
 }
-function renderBook(){ $("view-book").replaceChildren(h("p", { class: "hint", text: "문제집은 준비 중이에요." })); }
 function renderExam(){ $("view-exam").replaceChildren(h("div", { class: "panel empty" }, h("p", { text: "실전 모의고사는 준비 중이에요." }))); }
 
 /* ---------- boot ---------- */
 async function loadAll(){
-  [notes, cards, history, answers] = await Promise.all([db.all("notes"), db.all("cards"), db.all("history"), db.all("answers")]);
+  let bookRows, markRows;
+  [notes, cards, history, answers, bookRows, markRows] = await Promise.all(["notes", "cards", "history", "answers", "book", "marks"].map(st => db.all(st)));
+  books = new Map(bookRows.map(r => [r.id, r])); marks = new Map(markRows.map(r => [r.id, r]));
   notes.sort((a, b) => b.at - a.at); cards.sort((a, b) => b.at - a.at); answers.sort((a, b) => b.at - a.at);
   cardIds.clear(); for (const c of cards) cardIds.add(c.id);
   await loadBankState();

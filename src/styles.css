@@ -343,3 +343,33 @@ ruby rt{font:400 .52em/1 var(--sans);color:var(--muted);letter-spacing:0}
 .kind-row .kr-act{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .kind-row .kr-act .btn{min-height:44px}
 .section-title{font-size:13px;font-weight:600;color:var(--muted);margin:22px 2px 8px}
+/* ---- 한 화면에 한 문제 ---- */
+.play-head{position:sticky;top:calc(52px + env(safe-area-inset-top,0px));z-index:6;display:grid;gap:6px;margin:-14px -16px 0;padding:8px 16px 8px;background:var(--paper);border-bottom:1px solid var(--line)}
+.play-head .meta{gap:8px}
+.play-head .meta b{font-size:14px;color:var(--ink)}
+.grow{flex:1}
+.set.one{margin-top:8px}
+.set.one .q{border-bottom:0;padding-top:16px}
+.unit-title{margin:10px 2px -6px;font-family:var(--mincho)}
+.play-nav{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-top:10px}
+.play-nav .btn{min-height:50px}
+.mark-btn{min-width:50px;min-height:50px;font-size:20px;line-height:1;color:var(--ai)}
+.mark-btn[aria-pressed="true"]{color:var(--mark-ink);border-color:var(--mark-ink)}
+.center{text-align:center}
+.summary-box{margin-top:14px}
+.qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px}
+.qcell{display:grid;justify-items:center;gap:0;padding:6px 0;border:1px solid var(--line);border-radius:8px;background:var(--sheet);font:500 13px var(--mono);min-height:48px}
+.qcell i{font-style:normal;font-size:14px}
+.qcell.ok{border-color:var(--ok);background:var(--ok-soft)}.qcell.ok i{color:var(--ok)}
+.qcell.ng{border-color:var(--ng);background:var(--ng-soft)}.qcell.ng i{color:var(--ng)}
+a.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:inherit}
+a.btn.primary{color:var(--on-ai)}
+a.btn.disabled{opacity:.45;pointer-events:none}
+/* 문제집 회차 */
+.menu > .round-row{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center}
+.round-row .rn{font:700 16px var(--mincho);margin-right:8px}
+.round-row .rs{font-size:13px;color:var(--muted);text-align:right}
+.round-row.live .rs{color:var(--ai);font-weight:600}
+.round-row.done .rs{color:var(--ink)}
+.round-row .bar{grid-column:1 / -1}
+.bar.mini{height:4px}

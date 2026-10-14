@@ -23,7 +23,7 @@ index.html             화면 뼈대: 상단 앱바(뒤로·제목·D-day) + 화
 manifest.webmanifest   PWA(홈 화면 설치)
 sw.js                  오프라인 캐시(문제은행 포함). 앱 파일·문제은행을 고치면 VERSION을 올릴 것
 src/main.js            상태와 렌더링 전부. 해시 경로(#/home, #/part/문법, #/play …)마다 render* 함수(VIEWS 표). 더보기 = 면접·설정·내 문제·AI
-src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제
+src/bank.js            문제은행 로드·출제(안 푼 것 → 복습)·복습 일정·패턴 통계·기기 문제(AI/내 문제)·패턴별 출제·문제집 회차(bookRounds)·모의고사 예약 제외
 src/vocab.js           기본 단어장 로드·외웠어요(vocabDone)·틀리면 외웠어요 해제
 src/kinds.js           N1 1교시 12개 + 청해 3개 문제 유형 정의, 주제 목록, 시험일
 src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
@@ -45,9 +45,9 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 
 ## 데이터
 
-- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2), `progress`(문제은행 단위별 풀이·복습 일정, v3), `localBank`(기기에만 있는 AI 문제·내 문제, v3), `tagStats`(패턴별 출제·틀림, v3), `vocabDone`(기본 단어장 외웠어요, v4). 스키마는 `src/db.js` 상단 주석.
+- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2), `progress`(문제은행 단위별 풀이·복습 일정, v3), `localBank`(기기에만 있는 AI 문제·내 문제, v3), `tagStats`(패턴별 출제·틀림, v3), `vocabDone`(기본 단어장 외웠어요, v4), `book`(문제집 회차)·`marks`(북마크)·`exams`(모의고사)·`daily`(데일리 학습)·`vcards`(카드 암기 상태) (v5). 스키마는 `src/db.js` 상단 주석.
 - **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수), `n1.interview`(답변 노트 필터·쓰던 답변), `n1.mine`(내 문제 입력 중인 내용), `n1.vocab`(단어장 보기 설정).
-- 백업 JSON(`app: "n1-study"`, `version: 4`)에는 notes/cards/history/answers/progress/localBank/tagStats/vocabDone만 들어가고 **API 키는 절대 넣지 않는다.** v1(answers 없음) 파일도 불러올 수 있고, 앱보다 새 version은 거부한다. 스토어를 백업에 추가하면 `BACKUP_VERSION`(db.js)을 올릴 것.
+- 백업 JSON(`app: "n1-study"`, `version: 5`)에는 notes/cards/history/answers/progress/localBank/tagStats/vocabDone/book/marks/exams/daily/vcards만 들어가고 **API 키는 절대 넣지 않는다.** v1(answers 없음) 파일도 불러올 수 있고, 앱보다 새 version은 거부한다. 스토어를 백업에 추가하면 `BACKUP_VERSION`(db.js)을 올릴 것.
 - 스토어 구조를 바꾸면 `DB_VERSION`을 올리고 `onupgradeneeded`에서 마이그레이션.
 
 ## 문제 데이터 형식 (prompt.js ↔ sets.js가 공유)
