@@ -12,6 +12,7 @@ import { SCENES, KEIGO } from "./keigo.js";
 import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
+import { firebaseConfig } from "./firebase-config.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, recordExamUnits, qPerUnit } from "./bank.js";
 import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, addDays, streak } from "./daily.js";
 import { EXAM_CFG, loadExam, examRounds, reservedIds, buildSection, sectionMinutes, scoreExam } from "./exam.js";
@@ -33,7 +34,15 @@ const cardIds = new Set();
 let busy = null, lastError = "", toastTimer = null;
 let persist = "unsupported";
 
-const savePrefs = () => { prefs.set("n1.settings", settings); prefs.set("n1.gen", gen); };
+/* 기기 간 동기화하는 설정(API 키·읽기 음성은 제외). 바뀌면 n1.prefsU(바꾼 시각)를 남긴다 */
+const SYNC_PREF_KEYS = ["dailyMin", "ttsRate", "listenMode", "studyEarly", "model"];
+const syncedPrefs = () => Object.fromEntries(SYNC_PREF_KEYS.map(k => [k, settings[k]]));
+let prefsSnap = JSON.stringify(syncedPrefs());
+const savePrefs = () => {
+  prefs.set("n1.settings", settings); prefs.set("n1.gen", gen);
+  const snap = JSON.stringify(syncedPrefs());
+  if (snap !== prefsSnap){ prefsSnap = snap; prefs.set("n1.prefsU", Date.now()); sync?.schedule(); }
+};
 let curTimer = null;
 /* 풀던 세트 저장(문제집 회차면 그 회차 기록에도) */
 function saveCurrent(){
@@ -2072,7 +2081,7 @@ async function doImport(e){
 const VIEWS = {
   home: ["home", "N1 연습장"], part: ["home", null, "home"], play: ["home", null, "home", true], book: ["home", "문제집", "home"], exam: ["home", "실전 모의고사", "home"],
   cards: ["cards", "단어장"], note: ["note", "오답노트"], rec: ["rec", "기록"],
-  more: ["more", "더보기"], iv: ["more", "면접", "more"], set: ["more", "설정", "more"], mine: ["more", "내 문제 추가", "more"], ai: ["more", "AI로 새 문제", "more"],
+  more: ["more", "더보기"], iv: ["more", "면접", "more"], set: ["more", "설정", "more"], mine: ["more", "내 문제 추가", "more"], ai: ["more", "AI로 새 문제", "more"], account: ["more", "계정", "more"],
 };
 const route = { name: "home", args: [] };
 /* 앱 안에서 쌓은 깊이를 history.state.d에 둔다. 뒤로 버튼: 깊이가 있으면 브라우저 뒤로, 처음 연 화면이면 부모 화면으로 */
@@ -2117,7 +2126,7 @@ function render(){
   document.body.classList.toggle("at-home", route.name === "home");
   closeGloss();
   ({ home: renderHome, part: () => renderPart(route.args[0]), play: renderPlay, book: renderBook, exam: renderExam, cards: renderCards, note: renderNote, rec: renderRec,
-     more: renderMore, iv: renderInterview, set: renderSettings, mine: renderMine, ai: renderAI })[route.name]();
+     more: renderMore, iv: renderInterview, set: renderSettings, mine: renderMine, ai: renderAI, account: renderAccount })[route.name]();
 }
 window.addEventListener("hashchange", () => {
   if (nav.state?.d == null) nav.replaceState({ d: navDepth + 1 }, "", location.hash);   // 새로 들어온 화면
@@ -2126,12 +2135,66 @@ window.addEventListener("hashchange", () => {
 });
 function renderAll(){ render(); renderNoteCount(); }
 
+/* ---------- 계정 · 기기 간 동기화 (구글 로그인 + Firestore, src/sync.js) ---------- */
+/* 로그인한 적이 없으면 Firebase SDK를 불러오지 않는다. 계정 화면을 열면 [Google로 로그인]이 바로 팝업을 띄울 수 있게 미리 불러 둔다 */
+let sync = null, syncLoading = null, syncState = { status: "signedout", email: "", lastSync: null, error: "" };
+const hasFirebase = () => !!firebaseConfig?.apiKey;
+function loadSync(){
+  if (!hasFirebase()) return Promise.resolve(null);
+  if (!syncLoading) syncLoading = import("./sync.js").then(m => m.initSync(firebaseConfig, {
+    onState: s => { syncState = s; paintSyncBadge(); if (route.name === "account") renderAccount(); },
+    onPulled: async () => { await loadAll(); render(); renderNoteCount(); },
+    getPrefs: () => ({ u: prefs.get("n1.prefsU", 0), values: syncedPrefs() }),
+    applyPrefs: (values, u) => {
+      for (const k of SYNC_PREF_KEYS) if (k in values) settings[k] = values[k];
+      prefs.set("n1.settings", settings); prefs.set("n1.prefsU", u); prefsSnap = JSON.stringify(syncedPrefs());
+      setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice });
+    },
+  })).then(c => (sync = c)).catch(e => { syncLoading = null; syncState = { ...syncState, status: "error", error: "동기화 모듈을 불러오지 못했어요. 인터넷 연결을 확인하세요." }; paintSyncBadge(); console.warn(e); return null; });
+  return syncLoading;
+}
+const SYNC_LABEL = { ok: "동기화됨", syncing: "동기화 중", offline: "오프라인", error: "동기화 오류" };
+function paintSyncBadge(){
+  const b = $("sync-badge"), on = syncState.status !== "signedout" && !!SYNC_LABEL[syncState.status];
+  b.hidden = !on;
+  if (on){ b.textContent = SYNC_LABEL[syncState.status]; b.dataset.st = syncState.status; b.title = syncState.error || (syncState.lastSync ? `마지막 동기화 ${new Date(syncState.lastSync).toLocaleString("ko-KR")}` : ""); }
+}
+function renderAccount(){
+  const v = $("view-account"); v.replaceChildren();
+  const what = h("p", { class: "hint", text: "동기화하는 것: 오답노트·내 단어장·풀이 기록·복습 일정·패턴 통계·외웠어요·카드 상태·문제집 진행·북마크·끝난 모의고사·데일리 기록·면접 답변·내 문제(AI 문제 포함)·설정. API 키와 읽기 음성, 풀던 세트, 진행 중인 모의고사는 이 기기에만 있어요." });
+  if (!hasFirebase()){
+    v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "계정 · 설정 필요" }),
+      h("p", { text: "Firebase 설정(src/firebase-config.js)이 아직 없어서 로그인할 수 없어요. 로그인 없이도 이 기기에서는 그대로 쓸 수 있어요." }), what));
+    return;
+  }
+  loadSync();
+  const s = syncState, signedIn = s.status !== "signedout";
+  const box = h("section", { class: "panel stack" }, h("div", { class: "label", text: "계정 · 기기 간 동기화" }));
+  if (!signedIn){
+    box.append(h("p", { text: "구글로 로그인하면 휴대폰·PC에서 같은 진행 상황을 쓸 수 있어요. 기록은 여전히 이 기기에 먼저 저장되고, 바뀐 것만 내 계정 공간(Firestore)에 올라가요." }),
+      h("button", { class: "btn primary big", onclick: async () => { const c = sync || await loadSync(); c?.login(); } }, "Google로 로그인"),
+      h("p", { class: "hint", text: "처음 로그인하면 이 기기 기록과 클라우드 기록을 합쳐요(어느 쪽도 지우지 않아요)." }));
+  } else {
+    box.append(
+      h("div", { class: "acct" }, h("b", { text: s.email || "로그인됨" }), h("span", { class: "sync-badge", "data-st": s.status, text: SYNC_LABEL[s.status] || "" })),
+      h("p", { class: "hint", text: s.lastSync ? `마지막 동기화 ${new Date(s.lastSync).toLocaleString("ko-KR")}` : "아직 동기화하지 않았어요" }),
+      h("div", { class: "row" },
+        h("button", { class: "btn primary", disabled: s.status === "syncing", onclick: () => sync?.syncNow() }, s.status === "syncing" ? "동기화 중…" : "지금 동기화"),
+        h("button", { class: "btn ghost", onclick: async () => { await sync?.logout(); toast("로그아웃했어요. 이 기기의 기록은 그대로 있어요."); } }, "로그아웃")),
+      h("p", { class: "hint", text: "로그아웃해도 이 기기의 기록은 지워지지 않아요. 다른 계정으로 로그인하면 이 기기 기록이 그 계정에도 합쳐져요." }));
+  }
+  if (s.error) box.append(h("div", { class: "status err", role: "alert", text: s.error }));
+  box.append(what);
+  v.append(box);
+}
+
 /* ---------- 더보기 ---------- */
 function renderMore(){
   const v = $("view-more"); v.replaceChildren();
   const row = (href, title, sub) => h("a", { href }, h("div", null, h("span", { text: title }), h("span", { class: "m-sub", text: sub })), h("span", { class: "chev", text: "›" }));
   v.append(h("nav", { class: "menu" },
     row("#/iv", "면접", `내 답변 노트 ${answers.length}개 · 경어 카드 ${KEIGO.length}장`),
+    row("#/account", "계정", !hasFirebase() ? "설정 필요" : syncState.status === "signedout" ? "Google로 로그인 · 휴대폰·PC 동기화" : `${syncState.email} · ${SYNC_LABEL[syncState.status] || ""}`),
     row("#/set", "설정", "읽어주기 · 보기 · 백업 · Gemini API 키"),
     row("#/mine", "내 문제 추가", `교재 문제 등 직접 입력 · ${bank.local.filter(r => r.source === "mine").length}개`),
     row("#/ai", "AI로 새 문제", "Gemini로 만들기 · 예시 세트")));
@@ -2190,6 +2253,7 @@ async function boot(){
   }
   renderAll();
   backfillAll();
+  if (hasFirebase() && prefs.get("n1.sync.uid", null)) loadSync();     // 로그인한 적이 있을 때만 SDK를 불러 동기화
 
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("./sw.js").catch(() => {});
 }

@@ -4,11 +4,12 @@
  * 문제은행·기본 단어장(data/bank, data/vocab의 index.json에 적힌 파일)도 설치 때 캐시해서 오프라인에서 풀 수 있게 한다.
  * 앱 파일이나 문제은행을 고치면 VERSION을 올려야 사용자 기기에 새 버전이 반영된다.
  */
-const VERSION = "n1-study-v74";
+const VERSION = "n1-study-v75";
+const FIREBASE_SDK = "/firebasejs/12.19.0/";                // src/sync.js의 SDK 버전과 같게
 const SHELL = [
   "./", "./index.html", "./manifest.webmanifest",
   "./src/styles.css", "./src/main.js", "./src/dom.js", "./src/db.js", "./src/sets.js",
-  "./src/prompt.js", "./src/gemini.js", "./src/kinds.js", "./src/samples.js", "./src/interview.js", "./src/keigo.js", "./src/bank.js", "./src/vocab.js", "./src/furigana.js", "./src/tts.js", "./src/exam.js", "./src/daily.js",
+  "./src/prompt.js", "./src/gemini.js", "./src/kinds.js", "./src/samples.js", "./src/interview.js", "./src/keigo.js", "./src/bank.js", "./src/vocab.js", "./src/furigana.js", "./src/tts.js", "./src/exam.js", "./src/daily.js", "./src/firebase-config.js", "./src/sync.js",
   "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./icons/apple-touch-icon.png",
   "./data/bank/index.json", "./data/vocab/index.json", "./data/exam.json", "./data/exam-reserve.json", "./data/vocab/rank.json"
 ];
@@ -34,6 +35,11 @@ self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;                                  // API 호출(POST)은 그대로 통과
   if (url.hostname === "generativelanguage.googleapis.com") return;
 
+  // Firebase SDK(로그인했을 때만 불러옴): 버전이 주소에 고정돼 있어 한 번 받으면 캐시에서. Firestore·로그인 요청은 건드리지 않는다
+  if (url.hostname === "www.gstatic.com" && url.pathname.startsWith(FIREBASE_SDK)){
+    e.respondWith(caches.open(VERSION + "-sdk").then(async c => (await c.match(e.request)) || fetch(e.request).then(res => { if (res.ok) c.put(e.request, res.clone()); return res; })));
+    return;
+  }
   // 웹폰트: 한 번 받으면 캐시에서
   if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com"){
     e.respondWith(caches.open(VERSION + "-fonts").then(async c => {

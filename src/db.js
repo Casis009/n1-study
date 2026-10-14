@@ -1,5 +1,5 @@
 /*
- * 기기 저장소 (IndexedDB). 모든 학습 데이터는 이 기기 안에만 저장된다.
+ * 기기 저장소 (IndexedDB). 주 저장소는 언제나 이 기기. 구글 로그인하면 SYNC_STORES의 변경만 Firestore로 동기화한다(src/sync.js).
  *
  * stores
  *   notes   : 오답노트          { id, at, kind, title, passage, q }
@@ -16,12 +16,19 @@
  *   exams   : 모의고사 응시        { id, round, startedAt, timing, phase, ends, sets, flags, result, released }
  *   daily   : 데일리 학습(날짜별)  { id: "YYYY-MM-DD", plan, done, test, completedAt }
  *   vcards  : 단어·문법 카드 상태  { id: 단어장 항목 id, deck, step, due, seen, wrong, introducedOn, lastAt }
+ *   outbox  : 아직 클라우드에 안 올린 변경 { id: "스토어|키", store, key, at }   (동기화용, v6)
+ *   tombs   : 삭제 표시(다른 기기에 삭제 전파) { id: "스토어|키", store, key, _u }   (동기화용, v6)
  *
- * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가, v4: vocabDone 추가, v5: book·marks·exams·daily·vcards 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
+ * 동기화 대상 스토어(SYNC_STORES)의 행에는 저장할 때마다 _u(바꾼 시각 ms)가 붙는다. 충돌은 _u가 더 최근인 쪽이 이긴다.
+ * 로그인한 적이 있을 때(trackSync)만 outbox·tombs를 쌓는다. 모의고사(exams)는 끝난 회차(result 있음)만 올린다.
+ *
+ * v2: answers 스토어 추가, v3: progress·localBank·tagStats 추가, v4: vocabDone 추가, v5: book·marks·exams·daily·vcards 추가, v6: outbox·tombs 추가 (없는 스토어만 만들어서 기존 데이터는 그대로)
  */
 const DB_NAME = "n1-study";
-const DB_VERSION = 5;
-export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats", "vocabDone", "book", "marks", "exams", "daily", "vcards"];
+const DB_VERSION = 6;
+export const STORES = ["notes", "cards", "history", "meta", "answers", "progress", "localBank", "tagStats", "vocabDone", "book", "marks", "exams", "daily", "vcards", "outbox", "tombs"];
+export const SYNC_STORES = ["notes", "cards", "history", "progress", "tagStats", "vocabDone", "vcards", "book", "marks", "exams", "daily", "answers", "localBank"];
+const SYNCED = new Set(SYNC_STORES);
 
 let dbPromise = null;
 
@@ -39,10 +46,10 @@ function open(){
   return dbPromise;
 }
 
-function tx(store, mode, fn){
+function tx(stores, mode, fn){
   return open().then(db => new Promise((resolve, reject) => {
-    const t = db.transaction(store, mode);
-    const s = t.objectStore(store);
+    const t = db.transaction(stores, mode);
+    const s = Array.isArray(stores) ? Object.fromEntries(stores.map(n => [n, t.objectStore(n)])) : t.objectStore(stores);
     let result;
     Promise.resolve(fn(s)).then(r => { result = r; });
     t.oncomplete = () => resolve(result);
@@ -52,14 +59,68 @@ function tx(store, mode, fn){
 }
 const wrap = req => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
 
+/* 동기화 표시: 로그인한 적이 있으면(trackSync) 바뀐 행을 outbox에, 지운 행을 tombs에 남기고 onChange로 알린다 */
+let tracking = false, onChange = null;
+export function trackSync(on, hook = null){ tracking = on; onChange = hook; }
+const okey = (store, key) => `${store}|${key}`;
+const uploadable = (store, v) => store !== "exams" || !!v.result;     // 진행 중인 모의고사는 끝나면 올린다
+function stamp(store, values, s){
+  if (!SYNCED.has(store)) return false;
+  const now = Date.now();
+  for (const v of values){
+    v._u = now;
+    if (!tracking) continue;
+    s.tombs.delete(okey(store, v.id));
+    if (uploadable(store, v)) s.outbox.put({ id: okey(store, v.id), store, key: v.id, at: now });
+  }
+  return tracking;
+}
+function tomb(store, keys, s){
+  if (!SYNCED.has(store) || !tracking) return false;
+  const now = Date.now();
+  for (const key of keys){ s.tombs.put({ id: okey(store, key), store, key, _u: now }); s.outbox.put({ id: okey(store, key), store, key, at: now }); }
+  return true;
+}
+const stores = store => SYNCED.has(store) ? [store, "outbox", "tombs"] : [store];
+const notify = changed => { if (changed) onChange?.(); };
+
 export const db = {
   all: store => tx(store, "readonly", s => wrap(s.getAll())),
   get: (store, id) => tx(store, "readonly", s => wrap(s.get(id))),
-  put: (store, value) => tx(store, "readwrite", s => { s.put(value); }),
-  putMany: (store, values) => tx(store, "readwrite", s => { for (const v of values) s.put(v); }),
-  del: (store, id) => tx(store, "readwrite", s => { s.delete(id); }),
-  clear: store => tx(store, "readwrite", s => { s.clear(); }),
+  put: (store, value) => tx(stores(store), "readwrite", s => { const st = s[store] || s; const ch = SYNCED.has(store) && stamp(store, [value], s); st.put(value); return ch; }).then(notify),
+  putMany: (store, values) => tx(stores(store), "readwrite", s => { const st = s[store] || s; const ch = SYNCED.has(store) && stamp(store, values, s); for (const v of values) st.put(v); return ch; }).then(notify),
+  del: (store, id) => tx(stores(store), "readwrite", s => { const st = s[store] || s; st.delete(id); return SYNCED.has(store) && tomb(store, [id], s); }).then(notify),
+  clear: store => tx(stores(store), "readwrite", async s => {
+    const st = s[store] || s;
+    const keys = SYNCED.has(store) && tracking ? await wrap(st.getAllKeys()) : [];
+    st.clear();
+    return SYNCED.has(store) && tomb(store, keys, s);
+  }).then(notify),
 };
+
+/* 동기화 엔진(src/sync.js) 전용: 클라우드 값을 표시 없이 반영, 올릴 목록 관리 */
+export const syncDb = {
+  outbox: () => tx("outbox", "readonly", s => wrap(s.getAll())),
+  /* 올린 뒤: 그사이 다시 바뀌지 않았으면(at 같음) 지운다 */
+  done: entries => tx("outbox", "readwrite", async s => {
+    for (const e of entries){ const cur = await wrap(s.get(e.id)); if (cur && cur.at === e.at) s.delete(e.id); }
+  }),
+  tomb: (store, key) => tx("tombs", "readonly", s => wrap(s.get(okey(store, key)))),
+  /* 처음 로그인(합치기): 기기의 모든 행을 올릴 목록에 */
+  enqueueAll: () => tx(["outbox", "tombs", ...SYNC_STORES], "readwrite", async s => {
+    const now = Date.now();
+    for (const store of SYNC_STORES) for (const v of await wrap(s[store].getAll()))
+      if (uploadable(store, v)) s.outbox.put({ id: okey(store, v.id), store, key: v.id, at: now });
+    for (const t of await wrap(s.tombs.getAll())) s.outbox.put({ id: t.id, store: t.store, key: t.key, at: now });
+  }),
+  /* 클라우드에서 온 값 반영: row가 있으면 저장, 없으면(삭제) 지우고 삭제 표시를 그 시각으로 */
+  apply: (store, key, row, u) => tx([store, "tombs"], "readwrite", s => {
+    if (row){ s[store].put(row); s.tombs.delete(okey(store, key)); }
+    else { s[store].delete(key); s.tombs.put({ id: okey(store, key), store, key, _u: u }); }
+  }),
+};
+/* 행의 바꾼 시각. 예전 행(_u 없음)은 다른 시각 필드로 대신한다 */
+export const rowTime = v => v?._u ?? v?.updatedAt ?? v?.lastAt ?? v?.at ?? v?.startedAt ?? 0;
 
 /* 브라우저가 공간이 부족할 때 데이터를 지우지 않도록 요청한다. */
 export async function requestPersist(){

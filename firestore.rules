@@ -1,0 +1,10 @@
+rules_version = '2';
+// N1 연습장 동기화 규칙: 로그인한 본인(uid)의 users/{uid} 아래만 읽기·쓰기. 그 밖의 경로는 전부 거부(규칙이 없으면 거부).
+// 콘솔에 붙여 넣는 방법은 README.md "기기 간 동기화" 참고.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

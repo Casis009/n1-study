@@ -31,7 +31,10 @@ src/exam.js            실전 모의고사: 구성·예약 읽기, 교시 세트
 src/prompt.js          문제 생성·면접 꼬리 질문 프롬프트 (출력 JSON 스키마 포함)
 src/sets.js            모델 출력 검증·정리(normalizeQ), 선택지 섞기, JSON 관대 파싱
 src/gemini.js          Gemini REST 호출, 하루 호출 수 카운터, 한도 초기화 시각
-src/db.js              IndexedDB 래퍼, 백업 내보내기/불러오기, 영구 저장 요청
+src/db.js              IndexedDB 래퍼(동기화 대상 행에 _u 표시·outbox·tombs), 백업 내보내기/불러오기, 영구 저장 요청
+src/sync.js            기기 간 동기화(구글 로그인 + Firestore). 로그인한 적이 있을 때만 동적 import, SDK는 gstatic 12.19.0 고정
+src/firebase-config.js Firebase 웹 설정(공개돼도 되는 식별값). 비우면 계정 메뉴에 "설정 필요"
+firestore.rules        Firestore 보안 규칙(본인 uid만). 콘솔 붙여 넣기는 README "기기 간 동기화"
 src/samples.js         직접 작성한 예시 세트(어휘·문법·독해). API 없이도 화면 확인 가능
 src/interview.js       면접 질문 유형과 유형별 예시 질문(직접 작성)
 src/keigo.js           비즈니스 경어 상황 카드 42장(직접 작성, 오프라인)
@@ -51,7 +54,7 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 
 ## 데이터
 
-- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2), `progress`(문제은행 단위별 풀이·복습 일정, v3), `localBank`(기기에만 있는 AI 문제·내 문제, v3), `tagStats`(패턴별 출제·틀림, v3), `vocabDone`(기본 단어장 외웠어요, v4), `book`(문제집 회차)·`marks`(북마크)·`exams`(모의고사)·`daily`(데일리 학습)·`vcards`(카드 암기 상태) (v5). 스키마는 `src/db.js` 상단 주석.
+- **IndexedDB `n1-study`**: `notes`(오답노트), `cards`(단어장), `history`(풀이 기록), `meta`(풀던 세트 `current`), `answers`(면접 내 답변 노트, v2), `progress`(문제은행 단위별 풀이·복습 일정, v3), `localBank`(기기에만 있는 AI 문제·내 문제, v3), `tagStats`(패턴별 출제·틀림, v3), `vocabDone`(기본 단어장 외웠어요, v4), `book`(문제집 회차)·`marks`(북마크)·`exams`(모의고사)·`daily`(데일리 학습)·`vcards`(카드 암기 상태) (v5), `outbox`·`tombs`(동기화용, v6). 스키마는 `src/db.js` 상단 주석.
 - **localStorage**: `n1.settings`(API 키·모델), `n1.gen`(생성 옵션), `n1.calls`(오늘 호출 수), `n1.interview`(답변 노트 필터·쓰던 답변), `n1.mine`(내 문제 입력 중인 내용), `n1.vocab`(단어장 보기 설정).
 - 백업 JSON(`app: "n1-study"`, `version: 5`)에는 notes/cards/history/answers/progress/localBank/tagStats/vocabDone/book/marks/exams/daily/vcards만 들어가고 **API 키는 절대 넣지 않는다.** v1(answers 없음) 파일도 불러올 수 있고, 앱보다 새 version은 거부한다. 스토어를 백업에 추가하면 `BACKUP_VERSION`(db.js)을 올릴 것.
 - 스토어 구조를 바꾸면 `DB_VERSION`을 올리고 `onupgradeneeded`에서 마이그레이션.
@@ -84,7 +87,8 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 - 모델 출력은 항상 `textContent`로 넣는다(`h()` 사용). `innerHTML` 금지.
 - API 키를 코드·저장소·백업 파일에 넣지 않는다. 키는 설정 화면 입력 → localStorage.
 - 기출문제·교재 문장을 그대로 넣지 않는다(저작권). 예시·문제은행은 직접 작성(빈출 항목 목록은 써도 되지만 문장은 새로), 생성은 "새로 쓰기" 지시.
-- 사용자가 입력한 '내 문제'(교재 문제 등)는 기기 IndexedDB(`localBank`)에만 저장. `data/`나 커밋에 절대 넣지 않는다(백업 파일에는 포함, 백업 파일은 .gitignore).
+- 사용자가 입력한 '내 문제'(교재 문제 등)는 기기 IndexedDB(`localBank`)와, 로그인했을 때 본인 Firestore(users/{uid}/localBank)에만 저장. `data/`나 커밋에 절대 넣지 않는다(백업 파일에는 포함, 백업 파일은 .gitignore).
+- 동기화: 새 스토어를 만들면 동기화할지 정해서 db.js SYNC_STORES에 넣는다. 설정을 동기화하려면 main.js SYNC_PREF_KEYS에(API 키·읽기 음성은 절대 넣지 않음). Firebase SDK 버전을 바꾸면 src/sync.js import 주소와 sw.js FIREBASE_SDK를 같이.
 - 문제은행을 고치면 `tools/check-bank.mjs` 오류 0을 확인하고 docs/bank-plan.md 진행 현황을 갱신.
 - 기본 단어장 문법 `pattern`은 문제은행 `patternTags`와 같은 표기. 단어장을 고치면 `tools/check-vocab.mjs` 오류 0·patternTags 누락 경고 0 확인.
 - 문법 예문의 오늘의 시험 빈칸은 자동으로 찾는다(tools/grammar-blank.mjs). 활용이 커서 못 찾으면 check-vocab이 경고 → 그 항목에 `"blank": "예문 속 패턴 부분"`을 직접 쓴다(예: 〜めく → "めいて").
