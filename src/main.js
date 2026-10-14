@@ -13,11 +13,11 @@ import { buildPrompt, buildFollowupPrompt } from "./prompt.js";
 import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js";
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage, bookRounds, setFromIds, isReserved, setReserved, markWrongUnits, qPerUnit } from "./bank.js";
-import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, streak } from "./daily.js";
+import { DAILY_OPTIONS, NEW_CARDS, planDay, dayKey, addDays, streak } from "./daily.js";
 import { EXAM_CFG, loadExam, examRounds, reservedIds, buildSection, sectionMinutes, scoreExam } from "./exam.js";
 import { hasKanji, rubyParts } from "./furigana.js";
 import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, RATE_LABEL, speakerSplit } from "./tts.js";
-import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
+import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate, DECK_KINDS, vcards, rank, loadRank, loadCardState, cardDue, swipeCard, restoreCard } from "./vocab.js";
 
 const GROUPS = ["문자·어휘", "문법", "독해", "청해"];
 const NUM = ["①", "②", "③", "④"];
@@ -649,9 +649,6 @@ function renderHome(){
       h("span", { class: "hint", text: act ? `${act.round}회 진행 중 · 이어서` : lastEx ? `최근 ${lastEx.round}회 ${lastEx.result.total}/${lastEx.result.max}점 (추정) · ${examRounds().length}회분` : "1교시(언어지식·독해) → 휴식 → 청해, 점수 환산·합격 판정" })),
     h("span", { class: "chev", text: "›" })));
 }
-/* 단어·문법 카드 항목은 5단계(카드 암기)에서 */
-function cardItems(){ return []; }
-function dueCardCount(){ return 0; }
 
 /* ---------- 파트 → 유형 ---------- */
 function renderPart(grp){
@@ -1165,12 +1162,18 @@ const questionKeys = q => new Set([...(q.patternTags || []), ...(q.ex?.kanji || 
 
 function renderCards(){
   const v = $("view-cards"); v.replaceChildren();
-  renderCardsCount();
+  const [sub, deck] = route.args;
+  if (sub === "flash" && deck){ renderFlash(v, deck); return; }
+  if (sub === "test"){ renderTest(v); return; }
+  const flash = sub === "flash";
   const total = Object.keys(VKINDS).reduce((a, k) => a + vocabCount(k), 0);
+  const tab = (on, label, n, fn) => h("button", { class: "chip", "aria-pressed": String(on), onclick: fn }, label, n != null ? h("small", { text: String(n) }) : null);
+  const row = todayRow(), cardsLeft = ["words", "grammar"].reduce((a, d) => a + deckLeft(todayDeck(d, row)).length, 0);
   v.append(h("div", { class: "chips sub-tabs" },
-    h("button", { class: "chip", "aria-pressed": String(vb.mode !== "mine"), onclick: () => { vb.mode = "base"; saveVb(); renderCards(); } }, "기본 단어장", h("small", { text: String(total) })),
-    h("button", { class: "chip", "aria-pressed": String(vb.mode === "mine"), onclick: () => { vb.mode = "mine"; saveVb(); renderCards(); } }, "내 단어장", h("small", { text: String(cards.length) }))));
-  if (vb.mode === "mine") myCards(v); else baseVocab(v);
+    tab(flash, "카드 암기", cardsLeft || null, () => go("cards/flash", { replace: true })),
+    tab(!flash && vb.mode !== "mine", "기본 단어장", total, () => { vb.mode = "base"; saveVb(); go("cards", { replace: true }); }),
+    tab(!flash && vb.mode === "mine", "내 단어장", cards.length, () => { vb.mode = "mine"; saveVb(); go("cards", { replace: true }); })));
+  if (flash) renderFlashHub(v); else if (vb.mode === "mine") myCards(v); else baseVocab(v);
 }
 
 async function baseVocab(v){
@@ -1263,6 +1266,271 @@ async function solveTag(tag){
     if (!set){ toast("이 문법 문제가 아직 없어요"); return; }
     openSet(set);
   } catch (e){ toast(e?.message || "문제를 열지 못했어요"); }
+}
+
+/* ---------- 카드 암기 · 오늘의 시험 (데일리 단어·문법) ---------- */
+/* 오늘 덱 = 어제 시험에서 틀린 항목(맨 앞) + 오늘의 새 항목(자주 틀림 → A → B → C) + 복습할 카드. 그날 처음 열 때 정해서 daily 행에 저장 */
+const DECK_LABEL = { words: "단어", grammar: "문법" };
+const vocabCache = new Map();                      // id → { kind, it }
+async function vocabById(){
+  if (vocabCache.size) return vocabCache;
+  for (const kind of Object.keys(VKINDS)){ if (!vocabCount(kind)) continue; for (const it of await loadVocab(kind)) vocabCache.set(it.id, { kind, it }); }
+  return vocabCache;
+}
+function prevTestWrong(today){
+  const rows = [...dailyRows.values()].filter(r => r.id < today && r.test?.wrong?.length).sort((a, b) => b.id.localeCompare(a.id));
+  return rows[0]?.test.wrong || [];
+}
+function todayDeck(deck, row = todayRow()){
+  row.cards ||= {};
+  if (!row.cards[deck]){
+    const today = row.id, list = rank[deck] || [], ids = new Set(list.map(x => x[0]));
+    const nNew = (NEW_CARDS[settings.dailyMin || 60] || NEW_CARDS[60])[deck];
+    const wrong = vocabWrongMap();
+    const fresh = list.filter(([id]) => !vstate.done.has(id) && !vcards.has(id));
+    const wrongFirst = fresh.filter(x => wrong.get(x[2])).sort((a, b) => wrong.get(b[2]) - wrong.get(a[2]));
+    const newIds = [...new Set([...wrongFirst, ...fresh].map(x => x[0]))].slice(0, nNew);
+    const carry = prevTestWrong(today).filter(id => ids.has(id));
+    const due = [...vcards.values()].filter(r => r.deck === deck && cardDue(r.id, today)).sort((a, b) => a.dueDay.localeCompare(b.dueDay)).map(r => r.id);
+    row.cards[deck] = { ids: [...new Set([...carry, ...newIds, ...due])], newIds, swiped: [] };
+    db.put("daily", row).catch(() => {});
+  }
+  return row.cards[deck];
+}
+const deckLeft = d => d.ids.filter(id => !d.swiped.some(s => s.id === id));
+function dueCardCount(){ const t = dayKey(); return [...vcards.values()].filter(r => cardDue(r.id, t)).length; }
+function cardItems(row){
+  if (!rank.words.length) return [];
+  const items = [];
+  for (const deck of ["words", "grammar"]){
+    const d = todayDeck(deck, row), n = d.swiped.length, total = d.ids.length;
+    if (!total) continue;
+    items.push({ key: "cards:" + deck, label: `${DECK_LABEL[deck]} 카드 ${total}장`, sub: `새 ${d.newIds.length} · 복습 ${total - d.newIds.length} · 오른쪽 ○ 외웠음 / 왼쪽 ✕ 못 외움`,
+      done: n >= total, progress: [n, total], go: () => go("cards/flash/" + deck) });
+  }
+  const ready = items.every(i => i.done);
+  items.push({ key: "test", label: "오늘의 시험", sub: row.test ? `단어 ${row.test.word.right}/${row.test.word.total} · 문법 ${row.test.grammar.right}/${row.test.grammar.total}` : ready ? "단어 20 · 문법 5문항" : "카드를 다 넘기면 열려요",
+    done: !!row.test, progress: null, locked: !ready && !row.test, go: () => ready || row.test ? go("cards/test") : toast("오늘 카드를 다 넘기면 시험이 열려요") });
+  return items;
+}
+
+/* 카드 화면 */
+let flashUndo = [], flashFlip = false;
+function renderFlashHub(v){
+  const row = todayRow();
+  v.append(h("section", { class: "panel stack" }, h("div", { class: "label", text: "오늘의 카드" }),
+    ...["words", "grammar"].map(deck => { const d = todayDeck(deck, row), n = d.swiped.length;
+      return h("a", { class: "deck-row", href: `#/cards/flash/${deck}` },
+        h("div", { class: "grow" }, h("b", { text: `${DECK_LABEL[deck]} 카드` }), h("span", { class: "hint", text: `  새 ${d.newIds.length} · 복습 ${d.ids.length - d.newIds.length}` }), barNode(d.ids.length ? n / d.ids.length * 100 : 100, n >= d.ids.length ? "ok" : "")),
+        h("span", { class: "mono", text: `${n}/${d.ids.length}` })); }),
+    (() => { const it = cardItems(row).find(i => i.key === "test");
+      return h("button", { class: "btn big" + (it.locked ? "" : " primary"), disabled: !!it.locked, onclick: it.go }, row.test ? `오늘의 시험 결과 · ${it.sub}` : it.locked ? "오늘의 시험 · 카드를 다 넘기면 열려요" : "오늘의 시험 시작"); })(),
+    h("p", { class: "hint", text: `오른쪽으로 밀면 외웠음(3 → 7 → 14일 뒤 다시, 그다음 졸업 = 외웠어요), 왼쪽은 못 외움(1일 뒤 다시). 새 항목은 하루 단어 ${(NEW_CARDS[settings.dailyMin || 60]).words}개·문법 ${(NEW_CARDS[settings.dailyMin || 60]).grammar}개(설정의 하루 학습 시간).` })));
+}
+async function renderFlash(v, deck){
+  if (!DECK_KINDS[deck]){ v.append(h("p", { class: "hint", text: "없는 덱이에요." })); return; }
+  const row = todayRow(), d = todayDeck(deck, row), left = deckLeft(d);
+  $("title").textContent = `${DECK_LABEL[deck]} 카드`;
+  const all = await vocabById();
+  if (route.name !== "cards" || route.args[1] !== deck) return;
+  v.replaceChildren();
+  const n = d.swiped.length, total = d.ids.length;
+  v.append(h("div", { class: "play-head" }, barNode(total ? n / total * 100 : 100, n >= total ? "ok" : ""),
+    h("div", { class: "meta" }, h("b", { class: "mono", text: `${n}/${total}` }), h("span", { class: "hint", text: `남은 카드 ${left.length}장` }), h("span", { class: "grow" }),
+      h("span", { class: "hint mono", text: `○ ${d.swiped.filter(s => s.ok).length} · ✕ ${d.swiped.filter(s => !s.ok).length}` }))));
+  const undoBtn = h("button", { class: "btn flash-undo", type: "button", disabled: !flashUndo.some(u => u.deck === deck), "aria-label": "직전 카드 되돌리기", onclick: () => undoFlash(deck) }, "↶");
+  if (!left.length){
+    const other = deck === "words" ? "grammar" : "words", od = todayDeck(other, row);
+    v.append(h("section", { class: "panel stack center flash-done" }, h("div", { class: "big-num", text: "✓" }), h("b", { text: `${DECK_LABEL[deck]} 카드 끝!` }),
+      h("p", { class: "hint", text: `○ ${d.swiped.filter(s => s.ok).length} · ✕ ${d.swiped.filter(s => !s.ok).length}` }),
+      deckLeft(od).length ? h("a", { class: "btn primary big", href: `#/cards/flash/${other}` }, `${DECK_LABEL[other]} 카드로 →`)
+        : h("a", { class: "btn primary big", href: "#/cards/test" }, "오늘의 시험 →"),
+      h("div", { class: "row center" }, undoBtn, h("a", { class: "btn", href: "#/home" }, "홈으로"))));
+    return;
+  }
+  const id = left[0], entry = all.get(id);
+  if (!entry){ d.swiped.push({ id, ok: true, skip: true }); db.put("daily", row).catch(() => {}); renderFlash(v, deck); return; }
+  const card = flashCard(entry, vcards.get(id), d.newIds.includes(id));
+  v.append(h("div", { class: "flash-stage" }, card));
+  v.append(h("div", { class: "flash-btns" },
+    h("button", { class: "btn big flash-x", type: "button", "aria-label": "못 외웠음", onclick: () => commitFlash(deck, id, false, card) }, "✕"),
+    undoBtn,
+    h("button", { class: "btn big flash-o", type: "button", "aria-label": "외웠음", onclick: () => commitFlash(deck, id, true, card) }, "○")));
+  v.append(h("p", { class: "hint center", text: "카드를 탭하면 뒤집혀요 · 오른쪽 ○ 외웠음 · 왼쪽 ✕ 못 외움" }));
+  dragCard(card, ok => commitFlash(deck, id, ok, card));
+}
+function flashCard({ kind, it }, st, isNew){
+  const head = kind === "grammar" ? it.pattern : it.word;
+  const reading = kind === "grammar" ? (it.reading || it.pattern) : (it.reading || it.word);
+  const el = h("div", { class: "flash" + (flashFlip ? " flipped" : ""), tabIndex: 0, role: "button", "aria-label": "카드 뒤집기" });
+  const tag = h("div", { class: "flash-tag" }, h("span", { class: "tag", text: kind === "grammar" ? `문법 · ${it.group}` : kind === "kanji" ? `한자 읽기 · ${it.group}` : `어휘${it.pos ? " · " + it.pos : ""}` }),
+    isNew ? h("span", { class: "tag review", text: "새 카드" }) : st ? h("span", { class: "tag", text: `연속 ○ ${st.streak}` }) : null);
+  const front = h("div", { class: "flash-face front" }, tag, h("div", { class: "flash-word", lang: "ja", text: head }), h("div", { class: "hint", text: "탭해서 뒤집기" }));
+  const back = h("div", { class: "flash-face back" }, tag.cloneNode(true),
+    kind === "grammar" ? rubyNode(it.pattern, it.reading, { cls: "flash-word sm" }) : h("div", { class: "flash-word sm", lang: "ja", text: head }),
+    kind !== "grammar" ? h("div", { class: "flash-reading", lang: "ja" }, h("span", { text: it.reading }), speakBtn(reading, head)) : h("div", { class: "row center" }, speakBtn(reading, head)),
+    h("div", { class: "flash-meaning", text: it.meaning }),
+    kind === "grammar" && it.connection ? h("div", { class: "hint", lang: "ja", text: `접속: ${it.connection}` }) : null,
+    kind === "kanji" && it.confusable?.length ? h("div", { class: "hint" }, "헷갈리는 읽기 ", it.confusable.map(c => h("span", { class: "x-read", lang: "ja", text: `✕ ${c}` }))) : null,
+    kind === "words" && it.usage ? h("div", { class: "hint", lang: "ja", text: it.usage }) : null,
+    it.example ? h("div", { class: "flash-ex", lang: "ja" }, h("span", { text: it.example }), speakBtn(it.example, "예문")) : null,
+    it.exampleKo ? h("div", { class: "hint", text: it.exampleKo }) : null);
+  el.append(front, back);
+  const flip = () => { flashFlip = !flashFlip; el.classList.toggle("flipped", flashFlip); };
+  el.addEventListener("click", e => { if (e.target.closest(".spk") || el.dataset.dragged) return; flip(); });
+  el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); flip(); } });
+  return el;
+}
+/* 끌어서 넘기기: 가로로 90px 넘게 끌면 넘김, 아니면 제자리 */
+function dragCard(el, done){
+  let x0 = null, y0 = 0, dx = 0;
+  el.addEventListener("pointerdown", e => { if (e.target.closest(".spk")) return; x0 = e.clientX; y0 = e.clientY; dx = 0; delete el.dataset.dragged; el.setPointerCapture?.(e.pointerId); el.style.transition = "none"; });
+  el.addEventListener("pointermove", e => {
+    if (x0 == null) return;
+    dx = e.clientX - x0; const dy = e.clientY - y0;
+    if (Math.abs(dx) < 8 || Math.abs(dy) > Math.abs(dx)) return;
+    el.dataset.dragged = "1";
+    el.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
+    el.classList.toggle("go-o", dx > 60); el.classList.toggle("go-x", dx < -60);
+  });
+  const end = () => {
+    if (x0 == null) return;
+    x0 = null; el.style.transition = "";
+    if (Math.abs(dx) > 90) done(dx > 0);
+    else { el.style.transform = ""; el.classList.remove("go-o", "go-x"); setTimeout(() => { delete el.dataset.dragged; }, 0); }
+  };
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+}
+let flashBusy = false;
+async function commitFlash(deck, id, ok, el){
+  if (flashBusy) return; flashBusy = true;
+  try {
+    el.style.transition = ""; el.style.transform = `translateX(${ok ? 120 : -120}%) rotate(${ok ? 12 : -12}deg)`; el.style.opacity = "0";
+    const row = todayRow(), d = todayDeck(deck, row);
+    const snap = await swipeCard(id, deck, ok, row.id, addDays);
+    d.swiped.push({ id, ok }); await db.put("daily", row).catch(() => {});
+    flashUndo.push({ deck, snap }); if (flashUndo.length > 30) flashUndo.shift();
+    flashFlip = false;
+    await new Promise(r => setTimeout(r, 160));
+    checkDailyDone(todayItems());
+  } finally { flashBusy = false; }
+  if (route.name === "cards") renderCards();
+}
+async function undoFlash(deck){
+  const i = flashUndo.map(u => u.deck).lastIndexOf(deck); if (i < 0) return;
+  const [u] = flashUndo.splice(i, 1), row = todayRow(), d = todayDeck(deck, row);
+  await restoreCard(u.snap);
+  const j = d.swiped.map(s => s.id).lastIndexOf(u.snap.id); if (j >= 0) d.swiped.splice(j, 1);
+  d.ids = [u.snap.id, ...d.ids.filter(x => x !== u.snap.id)];        // 되돌린 카드를 맨 앞으로
+  await db.put("daily", row).catch(() => {});
+  flashFlip = false; toast("직전 카드를 되돌렸어요"); renderCards();
+}
+
+/* 오늘의 시험: 단어 20(뜻 고르기·읽기 고르기·한국어 보고 단어 고르기) + 문법 5(예문 패턴 빈칸) */
+let testState = null;                              // { day, qs, pos, done }
+const shuffleArr = a => { for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const pickN = (arr, n) => shuffleArr([...arr]).slice(0, n);
+async function buildTest(row){
+  const all = await vocabById();
+  const wd = todayDeck("words", row), gd = todayDeck("grammar", row);
+  const fill = (deck, ids, n, ok = () => true) => {
+    const out = [...new Set(ids)].filter(id => all.has(id) && ok(id));
+    for (const [id] of rank[deck]) { if (out.length >= n) break; if (!out.includes(id) && vcards.has(id) && all.has(id) && ok(id)) out.push(id); }
+    return pickN(out, n);
+  };
+  const wordIds = fill("words", wd.ids, 20), gramIds = fill("grammar", gd.ids, 5, id => !!rank.blanks[id]);
+  const pool = [...all.values()];
+  const qs = [];
+  wordIds.forEach((id, i) => qs.push(wordQ(all.get(id), pool, i % 3)));
+  for (const id of gramIds) qs.push(grammarQ(all.get(id), pool));
+  return qs.filter(Boolean);
+}
+/* 오답 선택지: 같은 종류(한자 읽기/어휘)·같은 품사(또는 분류)에서, 표제어 길이가 비슷한 것 우선 */
+function similarItems(e, pool, n, valOf){
+  const it = e.it, key = valOf(e);
+  const same = pool.filter(x => x.kind === e.kind && x.it.id !== it.id && valOf(x) && valOf(x) !== key);
+  const sameGroup = same.filter(x => (e.kind === "words" ? x.it.pos === it.pos : x.it.group === it.group));
+  const near = (sameGroup.length >= n ? sameGroup : same).sort((a, b) => Math.abs((a.it.word || "").length - (it.word || "").length) - Math.abs((b.it.word || "").length - (it.word || "").length));
+  const out = [], seen = new Set([key]);
+  for (const x of pickN(near.slice(0, 12), 12)) { if (out.length >= n) break; const v = valOf(x); if (!seen.has(v)){ seen.add(v); out.push(v); } }
+  return out;
+}
+function choiceQ(base, right, wrongs){
+  if (wrongs.length < 3) return null;
+  const choices = shuffleArr([right, ...wrongs.slice(0, 3)]);
+  return { ...base, choices, answer: choices.indexOf(right), sel: null };
+}
+function wordQ(e, pool, type){
+  const it = e.it, hasReading = it.reading && it.reading !== it.word;
+  if (type === 1 && !hasReading) type = 0;
+  if (type === 1){
+    let wrongs = (it.confusable || []).filter(r => r !== it.reading);
+    wrongs = [...wrongs, ...similarItems(e, pool, 3, x => x.it.reading)].filter((r, i, a) => r !== it.reading && a.indexOf(r) === i);
+    return choiceQ({ id: it.id, deck: "words", type: "reading", prompt: it.word, ask: "읽기를 고르세요", jaChoices: true }, it.reading, wrongs);
+  }
+  if (type === 2) return choiceQ({ id: it.id, deck: "words", type: "word", prompt: it.meaning, ask: "이 뜻의 단어를 고르세요", jaChoices: true }, it.word, similarItems(e, pool, 3, x => x.it.word));
+  return choiceQ({ id: it.id, deck: "words", type: "meaning", prompt: it.word, ask: "뜻을 고르세요", jaPrompt: true }, it.meaning, similarItems(e, pool, 3, x => x.it.meaning));
+}
+function grammarQ(e, pool){
+  const it = e.it, b = rank.blanks[it.id]; if (!b) return null;
+  const surf = x => { const bb = rank.blanks[x.it.id]; return bb ? x.it.example.slice(bb[0], bb[1]) : null; };
+  const right = it.example.slice(b[0], b[1]);
+  const others = pool.filter(x => x.kind === "grammar" && x.it.id !== it.id && surf(x) && surf(x) !== right);
+  const same = others.filter(x => x.it.group === it.group);
+  const wrongs = [...new Set(pickN(same.length >= 3 ? same : others, 6).map(surf))].slice(0, 3);
+  return choiceQ({ id: it.id, deck: "grammar", type: "grammar", prompt: it.example.slice(0, b[0]) + "（　　）" + it.example.slice(b[1]), ask: `（　　）에 들어갈 말 · ${it.exampleKo || ""}`, jaPrompt: true, jaChoices: true, pattern: it.pattern }, right, wrongs);
+}
+async function renderTest(v){
+  const row = todayRow();
+  $("title").textContent = "오늘의 시험";
+  if (row.test && !(testState?.day === row.id && !testState.saved)){ v.append(testResultNode(row)); return; }
+  const ready = ["words", "grammar"].every(d => !deckLeft(todayDeck(d, row)).length);
+  if (!ready){ v.append(h("div", { class: "panel empty" }, h("p", { text: "오늘 카드를 다 넘기면 시험이 열려요." }), h("a", { class: "btn primary", href: "#/cards/flash" }, "카드로"))); return; }
+  if (testState?.day !== row.id){
+    v.append(h("p", { class: "hint", text: "문제를 만드는 중…" }));
+    testState = { day: row.id, qs: await buildTest(row), pos: 0 };
+    if (route.name !== "cards") return;
+    v.replaceChildren();
+  }
+  const t = testState, n = t.qs.length;
+  if (!n){ v.append(h("p", { class: "hint", text: "시험을 만들 항목이 없어요." })); return; }
+  if (t.pos >= n){ await saveTest(row, t); v.replaceChildren(testResultNode(row)); return; }
+  const q = t.qs[t.pos];
+  v.append(h("div", { class: "play-head" }, barNode(t.pos / n * 100), h("div", { class: "meta" }, h("b", { class: "mono", text: `${t.pos + 1} / ${n}` }),
+    h("span", { class: "tag", text: q.deck === "grammar" ? "문법" : { meaning: "뜻 고르기", reading: "읽기 고르기", word: "단어 고르기" }[q.type] }))));
+  const box = h("section", { class: "panel stack test-q" },
+    h("div", { class: "hint", text: q.ask }),
+    h("div", { class: "test-prompt" + (q.type === "grammar" ? " sent" : ""), lang: q.jaPrompt ? "ja" : null, text: q.prompt }),
+    h("ol", { class: "choices" }, q.choices.map((c, i) => {
+      const done = q.sel != null, cls = "choice" + (done && i === q.answer ? " right" : done && i === q.sel ? " wrongpick" : "");
+      return h("li", null, h("button", { class: cls, disabled: done, "aria-pressed": String(q.sel === i), onclick: () => { q.sel = i; renderCards(); } },
+        h("span", { class: "bubble", text: String(i + 1) }), h("span", { class: q.jaChoices ? "jp" : null, lang: q.jaChoices ? "ja" : null, text: c })));
+    })));
+  if (q.sel != null){
+    const ok = q.sel === q.answer;
+    box.append(h("div", { class: "row" }, h("span", { class: "result " + (ok ? "ok" : "ng"), text: ok ? "맞았어요" : `틀렸어요 · 정답 ${NUM[q.answer]}` }), q.pattern ? h("span", { class: "hint", lang: "ja", text: q.pattern }) : null));
+  }
+  v.append(box, h("div", { class: "play-nav one-btn" }, h("button", { class: "btn big primary", disabled: q.sel == null, onclick: () => { t.pos++; renderCards(); window.scrollTo({ top: 0 }); } }, t.pos === n - 1 ? "결과 보기 →" : "다음 →")));
+}
+async function saveTest(row, t){
+  if (t.saved) return;
+  const part = d => { const qs = t.qs.filter(q => q.deck === d); return { right: qs.filter(q => q.sel === q.answer).length, total: qs.length }; };
+  const wrong = [...new Set(t.qs.filter(q => q.sel !== q.answer).map(q => q.id))];
+  row.test = { at: Date.now(), word: part("words"), grammar: part("grammar"), wrong };
+  /* 틀린 항목: 내일 덱 맨 앞(prevTestWrong) + 카드 상태는 ✕와 같게(1일 뒤) */
+  for (const id of wrong) await swipeCard(id, t.qs.find(q => q.id === id).deck, false, row.id, addDays).catch(() => {});
+  t.saved = true;
+  await db.put("daily", row).catch(() => {});
+  checkDailyDone(todayItems());
+}
+function testResultNode(row){
+  const t = row.test;
+  return h("section", { class: "panel stack center" }, h("div", { class: "label", text: `오늘의 시험 · ${row.id}` }),
+    h("div", { class: "score-rows" },
+      h("div", { class: "score-row" }, h("span", { text: "단어" }), h("b", { class: "mono", text: `${t.word.right}/${t.word.total}` }), h("span"), barNode(t.word.total ? t.word.right / t.word.total * 100 : 0, "ok")),
+      h("div", { class: "score-row" }, h("span", { text: "문법" }), h("b", { class: "mono", text: `${t.grammar.right}/${t.grammar.total}` }), h("span"), barNode(t.grammar.total ? t.grammar.right / t.grammar.total * 100 : 0, "ok"))),
+    h("p", { class: "hint", text: t.wrong.length ? `틀린 ${t.wrong.length}개는 내일 카드 맨 앞에 나와요.` : "모두 맞았어요!" }),
+    h("div", { class: "row center" }, h("a", { class: "btn primary", href: "#/home" }, "홈으로"), h("a", { class: "btn", href: "#/rec" }, "기록")));
 }
 
 /* ---------- 내 단어장(☆) ---------- */
@@ -1638,7 +1906,14 @@ function renderRec(){
   else mock.append(h("ul", { class: "hist" }, done.map(e => { const d = new Date(e.startedAt), s = e.result.scores;
     return h("li", { class: "link", onclick: () => go(`exam/result/${e.id}`) }, h("span", { class: "mono", text: `${d.getMonth() + 1}/${d.getDate()}` }), h("span", { text: `${e.round}회 · ${e.result.pass ? "합격권" : "불합격권"}` }),
       h("span", { class: "mono", text: `${e.result.total}/${e.result.max}` }), h("span", { class: "mono hint", text: `${s.lang.scaled ?? "–"}·${s.read.scaled ?? "–"}·${s.listen.scaled ?? "–"}` })); })));
-  v.append(mock, rec, tagStatsPanel());
+  const days = [...dailyRows.values()].sort((a, b) => b.id.localeCompare(a.id)).slice(0, 30);
+  const daily = h("section", { class: "panel stack" }, h("div", { class: "label", text: `데일리 학습 · 연속 ${streak(doneDays())}일` }));
+  if (!days.length) daily.append(h("p", { class: "hint", text: "홈의 '오늘의 학습'을 하면 날짜별로 쌓여요." }));
+  else daily.append(h("ul", { class: "hist daily-hist" }, days.map(r => { const [, m, d] = r.id.split("-"), c = r.cards || {};
+    const nCards = ["words", "grammar"].reduce((a, k) => a + (c[k]?.swiped.length || 0), 0);
+    return h("li", null, h("span", { class: "mono", text: `${+m}/${+d}` }), h("span", { text: `${r.completedAt ? "✓ 완료" : "진행"} · 카드 ${nCards}장` }),
+      h("span", { class: "mono", text: r.test ? `단어 ${r.test.word.right}/${r.test.word.total}` : "–" }), h("span", { class: "mono", text: r.test ? `문법 ${r.test.grammar.right}/${r.test.grammar.total}` : "" })); })));
+  v.append(daily, mock, rec, tagStatsPanel());
 
 }
 function renderMine(){ const v = $("view-mine"); v.replaceChildren(minePanel()); }
@@ -1815,6 +2090,7 @@ function goBack(){
   const parent = route.name === "play" ? (current?.book ? `book/${current.book.kind}` : current?.sample ? "ai" : partOf(current?.kind))
     : route.name === "book" ? partOf(route.args[0])
     : route.name === "exam" && route.args.length ? (route.args[0] === "review" ? `exam/result/${route.args[1]}` : "exam")
+    : route.name === "cards" && route.args.length ? (route.args[0] === "test" || route.args[1] ? "cards/flash" : "cards")
     : VIEWS[route.name][2] || "home";
   go(parent, { replace: true });
 }
@@ -1822,6 +2098,8 @@ function parentTitle(){
   if (route.name === "part") return route.args[0] || "";
   if (route.name === "play") return current ? (KINDS[current.kind]?.label || "") : "연습";
   if (route.name === "book") return `${KINDS[route.args[0]]?.label || ""} 문제집`;
+  if (route.name === "cards" && route.args[0] === "test") return "오늘의 시험";
+  if (route.name === "cards" && route.args[1]) return `${DECK_LABEL[route.args[1]] || ""} 카드`;
   return VIEWS[route.name][1];
 }
 function render(){
@@ -1829,9 +2107,9 @@ function render(){
   const [tab, , parent, immersive] = VIEWS[route.name];
   for (const name of Object.keys(VIEWS)) $("view-" + name).hidden = name !== route.name;
   document.querySelectorAll("#tabbar a").forEach(a => { if (a.dataset.tab === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-  $("back").hidden = !parent;
+  $("back").hidden = !parent && !(route.name === "cards" && route.args.length);
   $("title").textContent = parentTitle();
-  document.body.classList.toggle("immersive", !!immersive || (route.name === "exam" && route.args[0] === "run"));
+  document.body.classList.toggle("immersive", !!immersive || (route.name === "exam" && route.args[0] === "run") || (route.name === "cards" && (route.args[0] === "test" || !!route.args[1])));
   document.body.classList.toggle("at-home", route.name === "home");
   closeGloss();
   ({ home: renderHome, part: () => renderPart(route.args[0]), play: renderPlay, book: renderBook, exam: renderExam, cards: renderCards, note: renderNote, rec: renderRec,
@@ -1867,6 +2145,7 @@ async function loadAll(){
   cardIds.clear(); for (const c of cards) cardIds.add(c.id);
   await loadBankState();
   await loadVocabState();
+  await loadCardState();
 }
 /* 본문 해설이 생기기 전에 저장된 풀던 세트·오답노트: 기본 은행의 같은 지문에서 해석·해설을 채운다 */
 async function backfillStudy(o){
@@ -1889,7 +2168,7 @@ async function boot(){
   const dd = ddayNum();
   $("dday").append(h("span", { text: "시험까지" }), h("b", { text: dd > 0 ? `D-${dd}` : dd === 0 ? "D-DAY" : "끝!" }));
 
-  await Promise.all([loadIndex(), loadVocabIndex(), loadExam()]);
+  await Promise.all([loadIndex(), loadVocabIndex(), loadExam(), loadRank()]);
   applyReserve();                                      // 기기 저장소를 못 열어도 예약 문제는 빼 둔다
   try {
     await loadAll();

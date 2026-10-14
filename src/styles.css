@@ -418,3 +418,33 @@ main > .panel + .panel,main > .panel + details.panel{margin-top:12px}
 .cl-item.done .ck{background:var(--ok);border-color:var(--ok);color:var(--sheet)}
 .cl-item.done .cl-label{color:var(--muted);text-decoration:line-through}
 .cl-label{font-weight:500}
+/* ---- 카드 암기 · 오늘의 시험 ---- */
+.deck-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line);color:var(--ink);text-decoration:none}
+.deck-row .bar{margin-top:6px}
+.flash-stage{position:relative;margin-top:14px;min-height:min(62vh,460px);display:grid;touch-action:pan-y}
+.flash{position:relative;display:grid;min-height:inherit;border:1px solid var(--line);border-radius:16px;background:var(--sheet);box-shadow:0 6px 20px rgb(0 0 0 / .08);cursor:pointer;user-select:none;-webkit-user-select:none;transition:transform .18s ease,opacity .18s ease,box-shadow .18s;touch-action:pan-y}
+.flash-face{display:grid;align-content:center;justify-items:center;gap:10px;padding:22px 18px;text-align:center}
+.flash .back{display:none}
+.flash.flipped .front{display:none}
+.flash.flipped .back{display:grid;align-content:start}
+.flash-tag{position:absolute;top:12px;left:12px;display:flex;gap:6px}
+.flash-word{font:700 clamp(30px,10vw,46px)/1.25 var(--mincho);word-break:keep-all}
+.flash-word.sm{font-size:28px;margin-top:22px}
+.flash-reading{display:flex;align-items:center;gap:6px;font:500 20px var(--mincho);color:var(--ai)}
+.flash-meaning{font-size:17px;font-weight:600}
+.flash-ex{display:flex;gap:6px;align-items:flex-start;text-align:left;font:400 16px/1.8 var(--mincho);background:var(--paper);border-radius:8px;padding:8px 10px}
+.flash.go-o{box-shadow:0 0 0 3px var(--ok)}
+.flash.go-x{box-shadow:0 0 0 3px var(--ng)}
+.flash-btns{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;margin-top:14px}
+.flash-btns .btn{min-height:58px;font-size:24px}
+.flash-x{color:var(--ng);border-color:var(--ng)}
+.flash-o{color:var(--ok);border-color:var(--ok)}
+.flash-undo{min-width:58px;min-height:58px;font-size:22px}
+.flash-done{margin-top:16px;justify-items:center}
+.row.center{justify-content:center}
+.test-q{margin-top:12px}
+.test-prompt{font:700 30px/1.4 var(--mincho);text-align:center;padding:10px 0}
+.test-prompt:not([lang]){font:600 18px/1.6 var(--sans)}
+.test-prompt.sent{font:400 18px/1.9 var(--mincho);text-align:left}
+.play-nav.one-btn{grid-template-columns:1fr}
+.daily-hist li{grid-template-columns:44px 1fr auto auto}

@@ -51,3 +51,43 @@ export async function undoDoneFor(keys){
   }
   return n;
 }
+
+/*
+ * 카드 암기(vcards): 덱 words(한자+어휘) / grammar(문법). 날짜는 한국 날짜 "YYYY-MM-DD".
+ * ✕(왼쪽) = 못 외움 → 1일 뒤 다시, 연속 ○ 수 0으로. 외웠어요였으면 해제.
+ * ○(오른쪽) = 외웠음 → 연속 ○ 1·2·3번째는 3·7·14일 뒤, 4번째 ○ = 졸업(= 기존 "외웠어요" vocabDone).
+ * 행: { id, deck, streak, seen, wrong, dueDay, lastDay, introducedOn, graduated }
+ */
+export const CARD_DAYS = [3, 7, 14];
+export const DECK_KINDS = { words: ["kanji", "words"], grammar: ["grammar"] };
+export const vcards = new Map();
+export let rank = { words: [], grammar: [], blanks: {} };
+export async function loadRank(){
+  try { const r = await fetch("./data/vocab/rank.json"); if (r.ok) rank = await r.json(); } catch {}
+  return rank;
+}
+export async function loadCardState(){
+  const rows = await db.all("vcards");
+  vcards.clear(); for (const r of rows) vcards.set(r.id, r);
+}
+export const cardDue = (id, today) => { const r = vcards.get(id); return !!r && !r.graduated && r.dueDay != null && r.dueDay <= today; };
+/* 넘기기. 되돌리기용으로 이전 상태를 돌려준다 */
+export async function swipeCard(id, deck, ok, today, addDays){
+  const prev = vcards.get(id) ? { ...vcards.get(id) } : null, prevDone = vstate.done.has(id);
+  const r = prev ? { ...prev } : { id, deck, streak: 0, seen: 0, wrong: 0, introducedOn: today };
+  r.seen++; r.lastDay = today;
+  if (ok){
+    r.streak++;
+    if (r.streak > CARD_DAYS.length){ r.graduated = true; r.dueDay = null; if (!prevDone) await setDone(id, true); }
+    else { r.graduated = false; r.dueDay = addDays(today, CARD_DAYS[r.streak - 1]); }
+  } else {
+    r.streak = 0; r.wrong++; r.graduated = false; r.dueDay = addDays(today, 1);
+    if (prevDone) await setDone(id, false);
+  }
+  vcards.set(id, r); await db.put("vcards", r);
+  return { id, prev, prevDone };
+}
+export async function restoreCard({ id, prev, prevDone }){
+  if (prev){ vcards.set(id, prev); await db.put("vcards", prev); } else { vcards.delete(id); await db.del("vcards", id); }
+  if (prevDone !== vstate.done.has(id)) await setDone(id, prevDone);
+}

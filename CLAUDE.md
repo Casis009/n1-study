@@ -41,6 +41,7 @@ data/bank/             문제은행 <유형키>.json + index.json(도구가 생�
 tools/check-bank.mjs   문제은행 검증 + index.json 생성: node --no-warnings tools/check-bank.mjs
 data/vocab/            기본 단어장 grammar/kanji/words.json + index.json(도구가 생성). 뜻풀이·예문은 직접 작성
 tools/check-vocab.mjs  단어장 검증 + index.json 생성 + 문제은행 patternTags 누락 경고
+tools/rank-vocab.mjs   데일리 카드 우선순위(A 정답·선택지 → B 지문·gloss·ex.kanji → C) + 문법 예문 빈칸 → data/vocab/rank.json
 tools/check-all.mjs    커밋·push 전 전체 검사(문법 + check-bank + check-vocab + pick-exam). .githooks/pre-commit이 실행
 data/exam.json         모의고사 구성(JLPT 대문 순서·공식 문항 수·시간·합격 기준, 대체/건너뜀, 출처는 _source). 1교시 문항 수는 추정(estimated)
 data/exam-reserve.json 모의고사 회차별 예약 단위. tools/pick-exam.mjs --add 로 회차 추가(id 큰 쪽부터, 기존 회차 유지)
@@ -78,7 +79,7 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 
 ## 규칙
 
-- **push 전 `node --no-warnings tools/check-all.mjs` 통과 필수.** 모든 .js/.mjs를 ES 모듈 방식으로 문법 검사(그냥 `node --check src/x.js`는 깨진 정규식을 놓침) + check-bank + check-vocab(경고도 실패, index.json 최신 여부). 데이터를 고친 뒤에는 `--write`로 index.json까지 갱신. pre-commit hook(`.githooks/pre-commit`)이 같은 검사를 돌려 실패하면 커밋을 막는다 — 클론마다 `git config core.hooksPath .githooks` 한 번. hook을 `--no-verify`로 건너뛰지 않는다.
+- **push 전 `node --no-warnings tools/check-all.mjs` 통과 필수.** 모든 .js/.mjs를 ES 모듈 방식으로 문법 검사(그냥 `node --check src/x.js`는 깨진 정규식을 놓침) + check-bank + check-vocab(경고도 실패, index.json 최신 여부) + pick-exam(모의고사 예약) + rank-vocab(rank.json 최신 여부). 데이터를 고친 뒤에는 `--write`로 index.json·rank.json까지 갱신. pre-commit hook(`.githooks/pre-commit`)이 같은 검사를 돌려 실패하면 커밋을 막는다 — 클론마다 `git config core.hooksPath .githooks` 한 번. hook을 `--no-verify`로 건너뛰지 않는다.
 - **코드(src/·sw.js·index.html)를 바꿔 push한 뒤에는 배포 페이지(https://casis009.github.io/n1-study/)를 한 번 열어 콘솔 오류가 없는지 확인한다.** (2026-10-14 main.js 문법 오류로 화면이 통째로 비었던 일의 재발 방지)
 - 모델 출력은 항상 `textContent`로 넣는다(`h()` 사용). `innerHTML` 금지.
 - API 키를 코드·저장소·백업 파일에 넣지 않는다. 키는 설정 화면 입력 → localStorage.
@@ -103,7 +104,7 @@ docs/                  기획 메모, N1 형식 정리, bank-plan.md(문제은�
 
 1. 문제은행 2단계 작성 (유형별 요청 단위, docs/bank-plan.md). Gemini는 모델이 안정되면 12개 유형 프롬프트 점검(기본 모델 gemini-2.5-flash가 신규 키에서 404)
 2. 일본어 면접 대비 탭: 내 답변 노트(써 둔 답변 저장, 문장 가리고 외우기, 30초~2분 타이머, 예상 꼬리 질문 5개) + 비즈니스 경어 상황 카드 완료. 답변 첨삭은 하지 않기로 함(답변은 사용자가 이미 작성)
-3. 단어장 간격 반복(SRS) 복습
+3. ~~단어장 간격 반복(SRS) 복습~~ → 단어장 [카드 암기](2026-10-14, vcards: ✕ 1일 / ○ 3→7→14일 → 졸업 = 외웠어요)
 4. 시험 후: Flutter 앱으로 전환 검토 (iOS 빌드는 Mac 필요, 배포 조건은 docs/planning.md)
 
 ## 면접 탭 메모
