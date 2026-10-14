@@ -14,7 +14,7 @@ import { callGemini, callsToday, resetTimeKST, DEFAULT_MODEL } from "./gemini.js
 import { db, exportAll, importAll, requestPersist, persistState } from "./db.js";
 import { state as bank, loadIndex, loadBankState, bankCounts, pickSet, pickByTag, tagUnitCount, buildSet, recordSet, tagList, splitUnits, addLocalUnits, removeLocal, findUnitByPassage } from "./bank.js";
 import { hasKanji, rubyParts } from "./furigana.js";
-import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, speakerSplit } from "./tts.js";
+import { speak, stopSpeak, ttsReady, onVoices, jaVoices, setTtsOpts, RATES, RATE_LABEL, speakerSplit } from "./tts.js";
 import { VKINDS, vocabKey, vocabGroup, vocabCount, loadVocabIndex, loadVocab, loadVocabState, setDone, undoDoneFor, vstate } from "./vocab.js";
 
 const GROUPS = ["문자·어휘", "문법", "독해", "청해"];
@@ -1153,7 +1153,7 @@ function ttsSettings(){
   const box = h("div", { class: "stack tts-set" }, h("div", { class: "label", text: "읽어주기 🔊" }));
   const save = () => { setTtsOpts({ rate: settings.ttsRate, voice: settings.ttsVoice }); savePrefs(); };
   box.append(h("div", { class: "chips" }, h("span", { class: "hint", text: "속도" }), RATES.map(r => h("button", { class: "chip", type: "button", "aria-pressed": String(settings.ttsRate === r),
-    onclick: () => { settings.ttsRate = r; save(); renderSettings(); } }, r === 1 ? "1.0 보통" : r === 0.85 ? "0.85 조금 느리게" : "0.7 느리게"))));
+    onclick: () => { settings.ttsRate = r; save(); renderSettings(); } }, RATE_LABEL[r]))));
   const vs = jaVoices();
   if (!vs.length) box.append(h("p", { class: "hint" }, "이 기기에서 일본어 음성을 찾지 못했어요. ", h("button", { class: "btn small ghost", type: "button", onclick: openTtsHelp }, "설치 방법 보기")));
   else {

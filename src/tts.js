@@ -15,7 +15,8 @@ if (synth){ loadVoices(); synth.addEventListener?.("voiceschanged", loadVoices);
 export const jaVoices = () => voices;
 export const ttsReady = () => { if (!voices.length) loadVoices(); return voices.length > 0; };
 export const onVoices = f => watchers.add(f);
-export const RATES = [0.7, 0.85, 1.0];
+export const RATES = [0.7, 0.85, 1.0, 1.25, 1.5];
+export const RATE_LABEL = { 0.7: "0.7 느리게", 0.85: "0.85 조금 느리게", 1: "1.0 보통", 1.25: "1.25 조금 빠르게", 1.5: "1.5 빠르게" };
 const opts = { rate: 0.85, voice: "" };
 export function setTtsOpts(o){ if (RATES.includes(o.rate)) opts.rate = o.rate; if (typeof o.voice === "string") opts.voice = o.voice; }
 
