@@ -1100,7 +1100,8 @@ function renderExamReview(id, sid, i){
 
 /* ---------- 오답노트 ---------- */
 const noteOpen = new Set(), noteRetry = new Map();
-let noteFilter = "전체", confirmClear = false;
+let noteFilter = "전체", confirmClear = false, noteMode = "q";      // noteMode: q = 문제, vt = 단어·문법 시험
+const vtRetry = new Map();
 function renderNoteCount(){ const c = $("note-count"); c.textContent = notes.length > 99 ? "99+" : String(notes.length); c.hidden = !notes.length; }
 function renderNote(){
   const v = $("view-note"); v.replaceChildren();
@@ -1110,6 +1111,11 @@ function renderNote(){
       h("p", { class: "hint", text: "문제를 풀다가 틀리면 여기에 자동으로 모여요. 이 기기 안에 저장되고, 오프라인에서도 볼 수 있어요." })));
     return;
   }
+  const qNotes = notes.filter(n => n.kind !== "vocabtest"), vtNotes = notes.filter(n => n.kind === "vocabtest");
+  v.append(h("div", { class: "chips sub-tabs" },
+    h("button", { class: "chip", "aria-pressed": String(noteMode === "q"), onclick: () => { noteMode = "q"; renderNote(); } }, "문제", h("small", { text: String(qNotes.length) })),
+    h("button", { class: "chip", "aria-pressed": String(noteMode === "vt"), onclick: () => { noteMode = "vt"; renderNote(); } }, "단어·문법 시험", h("small", { text: String(vtNotes.length) }))));
+  if (noteMode === "vt"){ vocabTestNotes(v, vtNotes); return; }
   const weak = weakTags(false, 12), weakW = weakTags(true, 12);
   const chipsOf = list => h("div", { class: "weak" }, list.map(t => h("span", { lang: "ja", title: `출제 ${t.seen}회 · 틀림 ${t.wrong}회` }, t.id, h("i", { text: `틀림${t.wrong}·출제${t.seen}` }))));
   if (weak.length || weakW.length) v.append(h("section", { class: "panel stack" },
@@ -1119,13 +1125,13 @@ function renderNote(){
 
   const filters = h("div", { class: "chips", style: "margin-top:14px" });
   for (const f of ["전체", ...GROUPS]){
-    const n = f === "전체" ? notes.length : notes.filter(x => KINDS[x.kind]?.group === f).length;
+    const n = f === "전체" ? qNotes.length : qNotes.filter(x => KINDS[x.kind]?.group === f).length;
     filters.append(h("button", { class: "chip", "aria-pressed": String(noteFilter === f), onclick: () => { noteFilter = f; renderNote(); } }, f, h("small", { text: String(n) })));
   }
   v.append(filters);
 
   const list = h("div", { class: "stack", style: "margin-top:12px" });
-  for (const n of notes.filter(x => noteFilter === "전체" || KINDS[x.kind]?.group === noteFilter)){
+  for (const n of qNotes.filter(x => noteFilter === "전체" || KINDS[x.kind]?.group === noteFilter)){
     const det = h("details", { class: "note-item" });
     det.open = noteOpen.has(n.id);
     det.addEventListener("toggle", () => { det.open ? noteOpen.add(n.id) : noteOpen.delete(n.id); });
@@ -1146,10 +1152,47 @@ function renderNote(){
   v.append(list);
   const clear = h("div", { class: "confirm", style: "margin-top:18px" });
   if (!confirmClear) clear.append(h("button", { class: "btn small ghost", onclick: () => { confirmClear = true; renderNote(); } }, "오답노트 전체 비우기"));
-  else clear.append(h("span", { text: `${notes.length}개를 모두 지울까요? 백업이 없다면 되돌릴 수 없어요.` }),
-    h("button", { class: "btn small", onclick: async () => { notes = []; await db.clear("notes"); confirmClear = false; renderNote(); } }, "모두 지우기"),
+  else clear.append(h("span", { text: `문제 오답 ${qNotes.length}개를 모두 지울까요? 백업이 없다면 되돌릴 수 없어요.` }),
+    h("button", { class: "btn small", onclick: async () => { for (const n of qNotes) await removeNote(n.id); confirmClear = false; renderNote(); renderNoteCount(); } }, "모두 지우기"),
     h("button", { class: "btn small ghost", onclick: () => { confirmClear = false; renderNote(); } }, "취소"));
   v.append(clear);
+}
+
+/* 오답노트 · 단어·문법 시험 칸: 문제·내 답·정답·읽기·뜻·예문·다시 풀기 */
+function vocabTestNotes(v, list){
+  if (!list.length){ v.append(h("div", { class: "panel empty" }, h("p", { text: "오늘의 시험에서 틀린 단어·문법이 여기에 모여요." }))); return; }
+  if (!vocabCache.size){ vocabById().then(() => { if (route.name === "note") renderNote(); }); }
+  const box = h("div", { class: "stack", style: "margin-top:4px" });
+  for (const n of list){
+    const e = vocabCache.get(n.vid), q = n.q, r = vtRetry.get(n.id);
+    const head = e ? (e.kind === "grammar" ? e.it.pattern : e.it.word) : q.prompt;
+    const det = h("details", { class: "note-item" });
+    det.open = noteOpen.has(n.id);
+    det.addEventListener("toggle", () => { det.open ? noteOpen.add(n.id) : noteOpen.delete(n.id); });
+    const d = new Date(n.at);
+    det.append(h("summary", null,
+      h("div", { class: "meta" }, h("span", { class: "tag", text: n.deck === "grammar" ? "문법" : "단어" }), h("span", { text: `${d.getMonth() + 1}/${d.getDate()}` }),
+        n.wrongN > 1 ? h("span", { class: "tag wrong", text: `틀림 ×${n.wrongN}` }) : null),
+      h("div", { class: "stemline", lang: "ja", text: head })));
+    const body = h("div", { class: "note-body" });
+    body.append(h("div", { class: "hint", text: q.ask || "" }), h("div", { class: "vt-prompt", lang: q.type === "word" ? null : "ja", text: q.prompt }));
+    if (r){                                                    // 다시 풀기
+      body.append(h("ol", { class: "choices" }, q.choices.map((c, i) => {
+        const done = r.sel != null, cls = "choice" + (done && i === q.answer ? " right" : done && i === r.sel ? " wrongpick" : "");
+        return h("li", null, h("button", { class: cls, disabled: done, onclick: () => { r.sel = i; renderNote(); } }, h("span", { class: "bubble", text: String(i + 1) }), h("span", { class: "jp", lang: "ja", text: c })));
+      })));
+      if (r.sel != null) body.append(h("p", { class: "result " + (r.sel === q.answer ? "ok" : "ng"), text: r.sel === q.answer ? "맞았어요" : `틀렸어요 · 정답 ${NUM[q.answer]}` }));
+    } else body.append(h("div", { class: "vt-ans" }, h("span", { text: "정답 " }), h("b", { lang: "ja", text: q.choices[q.answer] }),
+      h("span", { text: " · 내 답 " }), h("s", { lang: "ja", text: q.mySel == null ? "–" : q.choices[q.mySel] })));
+    if (e) body.append(h("div", { class: "rep-back" }, ...cardBackNodes(e)));
+    body.append(h("div", { class: "confirm" },
+      h("button", { class: "btn small", onclick: () => { vtRetry.set(n.id, { sel: null }); noteOpen.add(n.id); renderNote(); } }, "다시 풀기"),
+      r ? h("button", { class: "btn small ghost", onclick: () => { vtRetry.delete(n.id); renderNote(); } }, "답 보기") : null,
+      h("button", { class: "btn small ghost", onclick: async () => { await removeNote(n.id); vtRetry.delete(n.id); renderNote(); renderNoteCount(); } }, "외웠어요 · 삭제")));
+    det.append(body);
+    box.append(det);
+  }
+  v.append(box);
 }
 
 /* ---------- 단어장: 기본 단어장(data/vocab) / 내 단어장(☆) ---------- */
@@ -1429,6 +1472,7 @@ async function commitFlash(deck, id, ok, el){
     el.style.transition = ""; el.style.transform = `translateX(${ok ? 120 : -120}%) rotate(${ok ? 12 : -12}deg)`; el.style.opacity = "0";
     const row = todayRow(), d = todayDeck(deck, row);
     const snap = await swipeCard(id, deck, ok, row.id, addDays);
+    snap.card = await markMiss(id, ok);
     d.swiped.push({ id, ok, at: Date.now() }); await db.put("daily", row).catch(() => {});
     flashUndo.push({ deck, snap }); if (flashUndo.length > 30) flashUndo.shift();
     flashFlip = false;
@@ -1441,10 +1485,38 @@ async function undoFlash(deck){
   const i = flashUndo.map(u => u.deck).lastIndexOf(deck); if (i < 0) return;
   const [u] = flashUndo.splice(i, 1), row = todayRow(), d = todayDeck(deck, row);
   await restoreCard(u.snap);
+  if (u.snap.card) await restoreMyCard(u.snap.card);
   const j = d.swiped.map(s => s.id).lastIndexOf(u.snap.id); if (j >= 0) d.swiped.splice(j, 1);
   d.ids = [u.snap.id, ...d.ids.filter(x => x !== u.snap.id)];        // 되돌린 카드를 맨 앞으로
   await db.put("daily", row).catch(() => {});
   flashFlip = false; toast("직전 카드를 되돌렸어요"); renderCards();
+}
+
+/*
+ * 못 외운 카드 → 내 단어장(cards)에 자동 추가: { ..., vid: 단어장 id, miss: true, missN }.
+ * ○로 졸업하면(vcards.graduated) miss만 풀고 단어장에는 남긴다. 되돌리기(↶)용으로 이전 상태를 돌려준다.
+ */
+const vocabCardType = kind => kind === "grammar" ? "grammar" : kind === "kanji" ? "kanji" : "words";
+async function markMiss(vid, ok){
+  const e = (await vocabById()).get(vid); if (!e) return null;
+  const type = vocabCardType(e.kind), front = e.kind === "grammar" ? e.it.pattern : e.it.word, id = cardId(type, front);
+  const prev = cards.find(c => c.id === id) || null;
+  if (ok){
+    if (!prev?.miss || !vcards.get(vid)?.graduated) return null;          // 졸업했을 때만 못 외움 표시 해제
+    await putMyCard({ ...prev, miss: false });
+  } else {
+    await putMyCard({ ...(prev || { id, at: Date.now(), type, front, reading: e.it.reading || "", meaning: e.it.meaning || "", extra: e.it.example || "", source: "카드 암기" }),
+      vid, miss: true, missN: (prev?.missN || 0) + 1, missAt: Date.now() });
+  }
+  return { id, prev };
+}
+async function putMyCard(c){
+  cards = [c, ...cards.filter(x => x.id !== c.id)]; cardIds.add(c.id);
+  await db.put("cards", c).catch(() => {});
+}
+async function restoreMyCard({ id, prev }){
+  if (prev) await putMyCard(prev);
+  else { cards = cards.filter(x => x.id !== id); cardIds.delete(id); await db.del("cards", id).catch(() => {}); }
 }
 
 /* 오늘의 시험: 단어 20(뜻 고르기·읽기 고르기·한국어 보고 단어 고르기) + 문법 5(예문 패턴 빈칸) */
@@ -1541,9 +1613,19 @@ async function saveTest(row, t){
     items: t.qs.map(q => ({ id: q.id, deck: q.deck, type: q.type, ask: q.ask, prompt: q.prompt, choices: q.choices, answer: q.answer, sel: q.sel, pattern: q.pattern || "" })) };   // 보고서용 문항별 기록
   /* 틀린 항목: 내일 덱 맨 앞(prevTestWrong) + 카드 상태는 ✕와 같게(1일 뒤) */
   for (const id of wrong) await swipeCard(id, t.qs.find(q => q.id === id).deck, false, row.id, addDays).catch(() => {});
+  for (const q of t.qs) if (q.sel !== q.answer) await addVocabNote(q);
+  renderNoteCount();
   t.saved = true;
   await db.put("daily", row).catch(() => {});
   checkDailyDone(todayItems());
+}
+/* 시험 오답: 오답노트 '단어·문법 시험' 칸. 같은 단어를 또 틀리면 새로 만들지 않고 틀린 횟수만 늘린다 */
+async function addVocabNote(q){
+  const id = "vt:" + q.id, prev = notes.find(n => n.id === id);
+  const note = { ...(prev || { id, kind: "vocabtest", vid: q.id, deck: q.deck, wrongN: 0, firstAt: Date.now() }), at: Date.now(), wrongN: (prev?.wrongN || 0) + 1,
+    q: { type: q.type, ask: q.ask, prompt: q.prompt, choices: q.choices, answer: q.answer, mySel: q.sel, pattern: q.pattern || "" } };
+  notes = [note, ...notes.filter(n => n.id !== id)];
+  await db.put("notes", note).catch(() => {});
 }
 function testResultNode(row){
   const t = row.test;
@@ -1581,6 +1663,7 @@ async function renderReport(){
     pick,
     h("button", { class: "btn", disabled: !next, "aria-label": "다음 기록 날짜", onclick: () => go(`report/${next}`, { replace: true }) }, "▶")));
   const row = dailyRows.get(day) || (day === dayKey() ? todayRow() : null);
+  if (day === dayKey() && row && rank.words.length) for (const d of ["words", "grammar"]) todayDeck(d, row);   // 오늘 덱이 아직 없으면 만든다
   const all = await vocabById();
   if (route.name !== "report") return;
   const hist = history.filter(r => inDay(r.at, day)), wrongNotes = dayNotes(day);
@@ -1675,7 +1758,8 @@ async function renderReview(v, day){
 }
 
 /* ---------- 내 단어장(☆) ---------- */
-const CARD_TYPES = { all: "전체", kanji: "한자", grammar: "문법", compare: "비슷한 말", keigo: "경어" };
+const CARD_TYPES = { all: "전체", miss: "못 외움", kanji: "한자", words: "어휘", grammar: "문법", compare: "비슷한 말", keigo: "경어" };
+const cardMatch = (c, f) => f === "all" || (f === "miss" ? !!c.miss : c.type === f);
 let cardFilter = "all", cardQuery = "", hideMeaning = false;
 const revealed = new Set();
 function renderCardsCount(){}
@@ -1688,8 +1772,9 @@ function myCards(v){
   const top = h("section", { class: "panel stack" });
   const chips = h("div", { class: "chips" });
   for (const [key, label] of Object.entries(CARD_TYPES)){
-    const n = key === "all" ? cards.length : cards.filter(c => c.type === key).length;
-    chips.append(h("button", { class: "chip", "aria-pressed": String(cardFilter === key), onclick: () => { cardFilter = key; renderCards(); } }, label, h("small", { text: String(n) })));
+    const n = cards.filter(c => cardMatch(c, key)).length;
+    if (!n && key !== "all" && key !== cardFilter) continue;
+    chips.append(h("button", { class: "chip" + (key === "miss" ? " miss" : ""), "aria-pressed": String(cardFilter === key), onclick: () => { cardFilter = key; renderCards(); } }, label, h("small", { text: String(n) })));
   }
   top.append(chips);
   const search = h("input", { id: "card-q", type: "search", placeholder: "단어·읽기·뜻으로 찾기", value: cardQuery });
@@ -1706,7 +1791,7 @@ function renderCardList(){
   const box = $("card-list"); if (!box) return;
   box.replaceChildren();
   const q = cardQuery.trim().toLowerCase();
-  const list = cards.filter(c => (cardFilter === "all" || c.type === cardFilter) &&
+  const list = cards.filter(c => cardMatch(c, cardFilter) &&
     (!q || [c.front, c.reading, c.meaning, c.extra].some(x => (x || "").toLowerCase().includes(q))));
   if (!list.length){ box.append(h("p", { class: "hint", text: "조건에 맞는 카드가 없어요." })); return; }
   for (const c of list){
@@ -1716,6 +1801,7 @@ function renderCardList(){
         h("b", { class: "front", lang: "ja", text: c.front }),
         c.reading ? h("span", { class: "r", lang: "ja", text: hidden ? "" : `（${c.reading}）` }) : null,
         h("span", { class: "tag", text: CARD_TYPES[c.type] || "" }),
+        c.miss ? h("span", { class: "tag wrong", text: `못 외움${c.missN > 1 ? ` ×${c.missN}` : ""}` }) : null,
         h("button", { class: "btn small ghost del", "aria-label": `${c.front} 삭제`, onclick: async e => { e.stopPropagation(); cards = cards.filter(x => x.id !== c.id); cardIds.delete(c.id); await db.del("cards", c.id); renderCards(); } }, "삭제")),
       hidden ? h("div", { class: "hint", text: "탭해서 뜻 보기" }) : h("div", { class: "card-body" },
         c.meaning ? h("div", { text: c.meaning }) : null,
